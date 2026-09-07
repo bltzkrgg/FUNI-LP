@@ -1,5 +1,5 @@
 import { decodeAbiParameters, decodeEventLog, decodeFunctionData, encodeAbiParameters, encodeFunctionData, keccak256, parseAbiItem, toHex, zeroAddress, type Address, type Hex } from 'viem';
-import { V4_ACTIONS, V4_MAX_EXECUTION_STATIC_FEE_PIPS, V4_ROBINHOOD_DEPLOYMENTS, buildV4Mint, classifyV4Hooks, decodeV4Fee, poolId, positionManagerAbi, type V4PoolKey } from './index.js';
+import { V4_ACTIONS, V4_ROBINHOOD_DEPLOYMENTS, buildV4Mint, classifyV4Hooks, decodeV4Fee, poolId, positionManagerAbi, v4ExecutionStaticFeeCapPips, type V4PoolKey } from './index.js';
 
 const poolKeyParam={type:'tuple',components:[{type:'address',name:'currency0'},{type:'address',name:'currency1'},{type:'uint24',name:'fee'},{type:'int24',name:'tickSpacing'},{type:'address',name:'hooks'}]} as const;
 const mintParamTypes=[poolKeyParam,{type:'int24'},{type:'int24'},{type:'uint256'},{type:'uint128'},{type:'uint128'},{type:'address'},{type:'bytes'}] as const;
@@ -22,7 +22,7 @@ const sameKey=(a:V4PoolKey,b:V4PoolKey)=>sameAddress(a.currency0,b.currency0)&&s
 const actionHex=(actions:readonly number[])=>`0x${actions.map(action=>action.toString(16).padStart(2,'0')).join('')}` as Hex;
 function actionBytes(actions:Hex){if((actions.length-2)%2!==0)throw new Error('V4_BATCH_ACTIONS_MALFORMED');const values:number[]=[];for(let offset=2;offset<actions.length;offset+=2)values.push(Number.parseInt(actions.slice(offset,offset+2),16));return values;}
 function decodeModifyLiquidities(calldata:Hex){const call=decodeFunctionData({abi:positionManagerAbi,data:calldata});if(call.functionName!=='modifyLiquidities')throw new Error('NOT_MODIFY_LIQUIDITIES');const [unlockData,deadline]=call.args,[actions,params]=decodeAbiParameters([{type:'bytes'},{type:'bytes[]'}],unlockData),bytes=actionBytes(actions);if(bytes.length!==params.length)throw new Error('V4_BATCH_ACTION_PARAM_LENGTH_MISMATCH');return {deadline,actions,params,bytes};}
-function assertSupportedKey(key:V4PoolKey){poolId(key);const fee=decodeV4Fee(key.fee),hooks=classifyV4Hooks(key.hooks);if(!hooks.supported||fee.blockers.length||(fee.staticFeePips??0)>V4_MAX_EXECUTION_STATIC_FEE_PIPS)throw new Error('V4_BATCH_POOL_UNSUPPORTED');}
+function assertSupportedKey(key:V4PoolKey){poolId(key);const fee=decodeV4Fee(key.fee),hooks=classifyV4Hooks(key.hooks);if(!hooks.supported||fee.blockers.length||(fee.staticFeePips??0)>v4ExecutionStaticFeeCapPips())throw new Error('V4_BATCH_POOL_UNSUPPORTED');}
 function assertCompatibleKeys<T extends {key:V4PoolKey}>(legs:readonly T[]){if(!legs.length)throw new Error('V4_BATCH_LEGS_REQUIRED');const key=legs[0]!.key;assertSupportedKey(key);for(const leg of legs){assertSupportedKey(leg.key);if(!sameKey(key,leg.key))throw new Error('V4_BATCH_POOL_KEY_MISMATCH');}return key;}
 
 /** Generic N-leg PositionManager batch. V4 BID Ladder V1 supplies exactly five legs. */

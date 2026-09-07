@@ -3,7 +3,7 @@ import { getAddress, type Address } from 'viem';
 import type { FallbackRpc } from '@funi/core';
 import { robinhoodMainnet } from '@funi/core';
 import { EconomicForegroundDemandActiveError, waitForEconomicForegroundDemandToClearSync, withSqliteTransientRetrySync, type SqliteLedgerRepository } from '@funi/ledger';
-import { classifyV4Hooks, decodeV4Fee, poolId, V4_MAX_EXECUTION_STATIC_FEE_PIPS } from '@funi/v4';
+import { classifyV4Hooks, decodeV4Fee, poolId, v4ExecutionStaticFeeCapPips } from '@funi/v4';
 import { attributedRpc, type RpcAttribution } from './rpc-attribution.js';
 import { cachedV4PoolsForToken, refreshV4RegistryPoolBatch } from './v4-registry.js';
 
@@ -204,7 +204,7 @@ export function directLookupRpcCandidatePoolIds(repo:SqliteLedgerRepository,cand
  const rows=candidateIds.length?repo.db.prepare(`SELECT pool_id,currency0,currency1,initialize_fee_raw,tick_spacing,hooks FROM v4_pool_registry WHERE chain_id=4663 AND lower(pool_id) IN (${candidateIds.map(()=>'?').join(',')})`).all(...candidateIds.map(id=>id.toLowerCase())) as Array<Record<string,unknown>>:[],byId=new Map(rows.map(row=>[String(row.pool_id).toLowerCase(),row])),funding=new Set([robinhoodMainnet.assets.USDG.toLowerCase(),robinhoodMainnet.assets.WETH.toLowerCase()]);
  for(const id of candidateIds){
   const row=byId.get(id.toLowerCase());if(!row){blocked.push({id,blockers:['CANDIDATE_REGISTRY_ROW_MISSING']});continue;}
-  const blockers:string[]=[];try{const fee=decodeV4Fee(Number(row.initialize_fee_raw)),hooks=classifyV4Hooks(getAddress(String(row.hooks))),key={currency0:getAddress(String(row.currency0)),currency1:getAddress(String(row.currency1)),fee:Number(row.initialize_fee_raw),tickSpacing:Number(row.tick_spacing),hooks:getAddress(String(row.hooks))};blockers.push(...fee.blockers,...hooks.blockers,...(fee.staticFeePips!==null&&fee.staticFeePips>V4_MAX_EXECUTION_STATIC_FEE_PIPS?['EXTREME_STATIC_FEE']:[]));if(poolId(key).toLowerCase()!==id.toLowerCase())blockers.push('POOL_KEY_IDENTITY_MISMATCH');if(token){const target=token.toLowerCase(),a=key.currency0.toLowerCase(),b=key.currency1.toLowerCase(),other=a===target?b:b===target?a:null;if(!other||!funding.has(other))blockers.push('UNSUPPORTED_FUNDING_PAIR');}}catch{blockers.push('POOL_KEY_IDENTITY_INVALID');}
+  const blockers:string[]=[];try{const fee=decodeV4Fee(Number(row.initialize_fee_raw)),hooks=classifyV4Hooks(getAddress(String(row.hooks))),key={currency0:getAddress(String(row.currency0)),currency1:getAddress(String(row.currency1)),fee:Number(row.initialize_fee_raw),tickSpacing:Number(row.tick_spacing),hooks:getAddress(String(row.hooks))};blockers.push(...fee.blockers,...hooks.blockers,...(fee.staticFeePips!==null&&fee.staticFeePips>v4ExecutionStaticFeeCapPips()?['EXTREME_STATIC_FEE']:[]));if(poolId(key).toLowerCase()!==id.toLowerCase())blockers.push('POOL_KEY_IDENTITY_MISMATCH');if(token){const target=token.toLowerCase(),a=key.currency0.toLowerCase(),b=key.currency1.toLowerCase(),other=a===target?b:b===target?a:null;if(!other||!funding.has(other))blockers.push('UNSUPPORTED_FUNDING_PAIR');}}catch{blockers.push('POOL_KEY_IDENTITY_INVALID');}
   const unique=[...new Set(blockers)];if(unique.length)blocked.push({id,blockers:unique});else rpcIds.push(id);
  }
  return {rpcIds,blocked};

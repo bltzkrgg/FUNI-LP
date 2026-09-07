@@ -76,7 +76,11 @@ export function decodeV4Fee(initializeFeeRaw:number,currentLpFeePips?:number,cur
 }
 export function classifyV4Hooks(hooks:Address):V4HookSemantics{const hooksZero=hooks.toLowerCase()===zeroAddress;return {hooks,hooksZero,classification:hooksZero?'ZERO_HOOK':'UNSUPPORTED_NONZERO_HOOK',supported:hooksZero,blockers:hooksZero?[]:['NONZERO_HOOK_UNSUPPORTED']};}
 export const V4_MAX_EXECUTION_STATIC_FEE_PIPS=50_000;
-export function v4ExecutionBlockers(state:V4PoolState,extremeFeePips=V4_MAX_EXECUTION_STATIC_FEE_PIPS):string[]{
+export function v4ExecutionStaticFeeCapPips(){
+ const configured=Number(process.env.V4_MAX_EXECUTION_STATIC_FEE_PIPS??V4_MAX_EXECUTION_STATIC_FEE_PIPS);
+ return Number.isSafeInteger(configured)&&configured>=0&&configured<=V4_MAX_STATIC_FEE_PIPS?configured:V4_MAX_EXECUTION_STATIC_FEE_PIPS;
+}
+export function v4ExecutionBlockers(state:V4PoolState,extremeFeePips=v4ExecutionStaticFeeCapPips()):string[]{
  const fee=state.feeSemantics??decodeV4Fee(state.key.fee,state.lpFee,state.protocolFee),hooks=state.hookSemantics??classifyV4Hooks(state.key.hooks),blockers=[...fee.blockers,...hooks.blockers];
  if(!state.initialized)blockers.push('POOL_NOT_INITIALIZED');
  // StateView.getLiquidity is current active liquidity, not whole-pool TVL or
