@@ -1117,12 +1117,16 @@ function persistPoolListing(input: {
       return { id, row };
     });
   const v4SelectionByPoolId = new Map(v4Selections.map(({ id, candidate }) => [candidate.poolId.toLowerCase(), id])),
+    v4FundingSymbol = (candidate: (typeof input.v4Candidates)[number]) =>
+      candidate.funding.address.toLowerCase() === robinhoodMainnet.assets.WETH.toLowerCase()
+        ? "ETH"
+        : candidate.funding.symbol,
     v4Pair = (candidate: (typeof input.v4Candidates)[number]) => {
       const metadataName = (candidate.target as { name?: string }).name,
         displayName = candidate.target.address.toLowerCase() === input.tokenAddress.toLowerCase()
           ? tokenListingName(input.tokenSymbol, input.tokenName ?? metadataName)
           : tokenListingName(candidate.target.symbol, metadataName);
-      return `${displayName}/${candidate.funding.symbol}`;
+      return `${displayName}/${v4FundingSymbol(candidate)}`;
     },
     v4Section = (candidate: (typeof input.v4Candidates)[number]): PoolListingItem["section"] =>
       candidate.executionEligible
@@ -1154,7 +1158,7 @@ function persistPoolListing(input: {
         return {
         section: v4Section(candidate),
         rank,
-        label: v4PoolSelectionLabel(candidate.target.symbol,candidate.funding.symbol,candidate.feeLabel),
+        label: v4PoolSelectionLabel(candidate.target.symbol,v4FundingSymbol(candidate),candidate.feeLabel),
         data: id ? `v4-pool:${id}` : "",
         pair: v4Pair(candidate),
         protocol: "v4" as const,
@@ -1234,13 +1238,30 @@ function directLookupTargetSymbol<T extends {target:{symbol:string}}>(candidates
 function isAddressFallbackLabel(value: unknown) {
   return typeof value === "string" && /^0x[a-fA-F0-9]{4,}…?$/.test(value.trim());
 }
+function isGenericCachedTokenName(value: unknown) {
+  return /^(cached token|cached funding token)$/i.test(String(value ?? "").trim());
+}
 function tokenListingName(symbol: string, name?: string | null) {
   const cleanSymbol = symbol.trim(),
     cleanName = String(name ?? "").trim();
-  if (cleanName && isAddressFallbackLabel(cleanSymbol)) return compactLabel(cleanName, 24);
-  if (cleanName && cleanName.toLowerCase() !== cleanSymbol.toLowerCase())
+  if (cleanName && !isGenericCachedTokenName(cleanName) && isAddressFallbackLabel(cleanSymbol)) return compactLabel(cleanName, 24);
+  if (cleanName && !isGenericCachedTokenName(cleanName) && cleanName.toLowerCase() !== cleanSymbol.toLowerCase())
     return compactLabel(`${cleanSymbol} (${cleanName})`, 32);
   return cleanSymbol;
+}
+async function resolvedDirectLookupTokenDisplay(db:SqliteLedgerRepository,token:Address){
+  const cached=directLookupTokenDisplay(db,token),
+    cachedSymbol=String(cached?.symbol??""),
+    cachedName=String(cached?.name??"");
+  if(cachedSymbol&&!isAddressFallbackLabel(cachedSymbol)&&!isGenericCachedTokenName(cachedName))return cached;
+  try{
+    const inspected=await inspectErc20(rpc,token);
+    if(inspected.status==='available'){
+      db.upsertTokenMetadata({address:inspected.value.address,symbol:inspected.value.symbol,name:inspected.value.name,decimals:inspected.value.decimals});
+      return inspected.value;
+    }
+  }catch(error){log("telegram_direct_lookup_token_metadata_refresh_failed",{token,error:textError(error),mainnetTransactionsSent:0});}
+  return cached;
 }
 async function beginToken(ctx: any, address: string, pasteReceivedAtMs=Date.now()) {
   const tokenAddress = getAddress(address), interactionId = randomUUID(), started = Date.now(),
@@ -1265,7 +1286,7 @@ async function beginToken(ctx: any, address: string, pasteReceivedAtMs=Date.now(
   try {
     v4Lookup = cachedV4PoolsForToken({ repo: lookupDb, token: tokenAddress });
     const presentedV4 = applyDirectLookupCandidatePresentation(lookupDb,tokenAddress,v4Lookup.candidates),
-    meta = directLookupTokenDisplay(lookupDb,tokenAddress);
+    meta = await resolvedDirectLookupTokenDisplay(lookupDb,tokenAddress);
     v3Rows = lookupDb.v3CachedPoolsForToken(tokenAddress, [robinhoodMainnet.assets.USDG,robinhoodMainnet.assets.WETH]);
     tokenSymbol = String(meta?.symbol ?? `${tokenAddress.slice(0, 6)}…`);
     tokenName = meta?.name ? String(meta.name) : undefined;
@@ -1587,7 +1608,7 @@ async function deliverDirectLookupOutbox() {
           baseFlowRevision = subscriber?.base_flow_revision == null
             ? undefined
             : Number(subscriber.base_flow_revision),
-          meta = directLookupTokenDisplay(renderDb,getAddress(payload.token)),
+          meta = await resolvedDirectLookupTokenDisplay(renderDb,getAddress(payload.token)),
           symbol = String(meta?.symbol ?? `${payload.token.slice(0, 6)}…`),
           tokenName = meta?.name ? String(meta.name) : undefined;
         const applyOutboxFlowState = (nextState: Record<string, unknown>) => {
