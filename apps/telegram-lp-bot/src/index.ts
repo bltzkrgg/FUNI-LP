@@ -2081,7 +2081,7 @@ async function bidLadderDirectLiveOnce(ctx: any, enteredAmount?: string, interac
     try {
       const native = sameAddress(funding.address, robinhoodMainnet.assets.USDG)
         ? 1
-        : (await execution.run("PREVIEW_PLAN_NATIVE_USD",signal=>v4BidLadderNativeUsd({repo:db,rpc:rpc.scoped({workflowId:execution.identity.requestId,stage:"preview_plan_native_usd",signal})}),{reserveMs:1_500})).nativeUsd;
+        : (await execution.run("PREVIEW_PLAN_NATIVE_USD",signal=>v4BidLadderNativeUsd({repo:db,rpc:rpc.scoped({workflowId:execution.identity.requestId,stage:"preview_plan_native_usd",signal}),configuredNativeUsd:env.GAS_USD_PER_NATIVE}),{reserveMs:1_500})).nativeUsd;
       execution.validateCurrent();
       createV4BidLadderLive(
         db,
@@ -2502,7 +2502,7 @@ async function ladderLiveContext(
     : rpc;
   const native = confirmedOpen?.projectionComplete
     ? { nativeUsd: 1 }
-    : await v4BidLadderNativeUsd({ repo: db, rpc: previewRpc });
+    : await v4BidLadderNativeUsd({ repo: db, rpc: previewRpc, configuredNativeUsd: env.GAS_USD_PER_NATIVE });
   let fundingUsd: number;
   if (sameAddress(tokens.funding.address, robinhoodMainnet.assets.USDG))
     fundingUsd = 1;

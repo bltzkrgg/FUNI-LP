@@ -647,7 +647,7 @@ describe("V4 BID ladder manual dry-run operator surface", () => {
     ])
       expect(source).toContain(`bot.command("${command}"`);
     expect(direct).toContain("createV4BidLadderLive(");
-    expect(direct).toContain("v4BidLadderNativeUsd({repo:db,rpc:rpc.scoped(");
+    expect(direct).toContain("configuredNativeUsd:env.GAS_USD_PER_NATIVE");
     expect(direct).toContain(
       "return await bidLadderLivePreview(ctx,preview.plan.ladderId,{messageId:",
     );
@@ -826,7 +826,7 @@ describe("V4 BID ladder manual dry-run operator surface", () => {
     expect(view).toContain("leg.open_batch_id");
     expect(view).toContain('bidLadderCallback("livePreview", ladderId)');
   });
-  it("uses only the V4 native USD reference in BID Ladder live context", () => {
+  it("uses configured native USD or the V4 native USD reference in BID Ladder live context", () => {
     const source = readFileSync("apps/telegram-lp-bot/src/index.ts", "utf8"),
       context = source.slice(
         source.indexOf("async function ladderLiveContext"),
@@ -837,7 +837,7 @@ describe("V4 BID ladder manual dry-run operator surface", () => {
         live.indexOf("export async function v4BidLadderNativeUsd"),
         live.indexOf("async function openState"),
       );
-    expect(context).toContain("v4BidLadderNativeUsd({ repo: db, rpc: previewRpc })");
+    expect(context).toContain("configuredNativeUsd: env.GAS_USD_PER_NATIVE");
     expect(context).not.toMatch(
       /operationalNativeUsd|operationalFundingUsd|trustedWethUsdReference|cachedV3DeploymentAudit|auditRobinhoodV3Deployments|v3_deployment_audit/,
     );

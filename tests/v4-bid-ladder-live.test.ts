@@ -524,9 +524,30 @@ describe("V4 BID ladder Phase 2B operator boundary", () => {
       f.repo.close();
     }
   });
-  it("uses only an injected V4 native reference and fails closed when it is unavailable", async () => {
+  it("uses configured native USD before V4 reference and fails closed when both are unavailable", async () => {
     const f = fixture();
     try {
+      let referenceCalls = 0;
+      const configured = await v4BidLadderNativeUsd({
+        repo: f.repo,
+        rpc: f.rpc,
+        configuredNativeUsd: 5000,
+        reference: async () => {
+          referenceCalls++;
+          return {
+            status: "unavailable" as const,
+            reason: "V4_REFERENCE_UNAVAILABLE",
+          };
+        },
+        nowMs: () => 2_000,
+      });
+      expect(configured).toMatchObject({
+        nativeUsd: 5000,
+        nativeUsdSource: "GAS_USD_PER_NATIVE",
+        nativeUsdObservedAtMs: 2_000,
+        nativeUsdFreshUntilMs: 62_000,
+      });
+      expect(referenceCalls).toBe(0);
       const value = await v4BidLadderNativeUsd({
         repo: f.repo,
         rpc: f.rpc,

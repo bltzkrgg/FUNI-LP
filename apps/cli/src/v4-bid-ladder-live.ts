@@ -263,9 +263,23 @@ function postReceiptOpenSqliteWrite<T>(
 export async function v4BidLadderNativeUsd(input: {
   repo: SqliteLedgerRepository;
   rpc: FallbackRpc;
+  configuredNativeUsd?: number;
   reference?: typeof trustedV4WethUsdReference;
   nowMs?: () => number;
 }) {
+  const nowMs = input.nowMs ?? Date.now;
+  if (
+    Number.isFinite(input.configuredNativeUsd) &&
+    Number(input.configuredNativeUsd) > 0
+  ) {
+    const observedAtMs = nowMs();
+    return {
+      nativeUsd: Number(input.configuredNativeUsd),
+      nativeUsdSource: "GAS_USD_PER_NATIVE",
+      nativeUsdObservedAtMs: observedAtMs,
+      nativeUsdFreshUntilMs: observedAtMs + 60_000,
+    };
+  }
   const price = await (input.reference ?? trustedV4WethUsdReference)({
     rpc: input.rpc,
     repo: input.repo,
@@ -273,7 +287,7 @@ export async function v4BidLadderNativeUsd(input: {
   if (price.status !== "available")
     throw new Error(`V4_NATIVE_USD_PRICE_UNAVAILABLE:${price.reason}`);
   const observedAtMs = Date.parse(price.observedAt),
-    freshUntilMs = (input.nowMs ?? Date.now)() + 60_000;
+    freshUntilMs = nowMs() + 60_000;
   if (
     !Number.isFinite(observedAtMs) ||
     !Number.isFinite(price.value) ||
