@@ -2,16 +2,16 @@ export const POOL_PAGE_SIZE=9;
 export type PoolListingSection='v4_eligible'|'v4_checking'|'v4_no_active'|'v4_unavailable'|'v3_eligible';
 export type PoolListingItem={section:PoolListingSection;label:string;data:string;detail?:string;rank?:number;pair?:string;protocol?:'v4'|'v3';feeLabel?:string;tvlUsd?:number|null;volume24hUsd?:number|null;priceDiffPct?:number|null;statusLabel?:string;reason?:string};
 export type PoolListing={tokenSymbol:string;tokenAddress:string;items:PoolListingItem[];unavailableItems?:PoolListingItem[];counts:{v4Eligible:number;v3Eligible:number;v4Unavailable:number;zeroLiquidity:number;checking:number;unsupported:number;evidenceUnavailable?:number;notInitialized?:number}};
-const sectionOrder:Record<PoolListingSection,number>={v4_eligible:0,v3_eligible:1,v4_unavailable:2,v4_checking:3,v4_no_active:4};
+const sectionOrder:Record<PoolListingSection,number>={v4_eligible:0,v4_checking:1,v4_no_active:2,v4_unavailable:3,v3_eligible:4};
 export function compactLabel(value:string,max=58){return value.length<=max?value:`${value.slice(0,Math.max(1,max-1))}…`;}
 export function v4PoolSelectionLabel(targetSymbol:string,fundingSymbol:string,feeLabel:string){return compactLabel(`v4 · ${targetSymbol}/${fundingSymbol} · fee ${feeLabel}`);}
 export function rankPoolListing(items:readonly PoolListingItem[]){return [...items].sort((a,b)=>sectionOrder[a.section]-sectionOrder[b.section]||(a.rank??Number.MAX_SAFE_INTEGER)-(b.rank??Number.MAX_SAFE_INTEGER)||a.label.localeCompare(b.label)||a.data.localeCompare(b.data));}
 const executableSections=new Set<PoolListingSection>(['v4_eligible','v3_eligible']);
 export function executablePoolListingItems(listing:PoolListing){return listing.items.filter(item=>executableSections.has(item.section));}
 export function unavailablePoolListingItems(listing:PoolListing){return listing.unavailableItems??listing.items.filter(item=>item.section==='v4_unavailable');}
-export function poolListingPage(listing:PoolListing,page:number,pageSize=POOL_PAGE_SIZE){const executable=executablePoolListingItems(listing),totalPages=Math.max(1,Math.ceil(executable.length/pageSize)),current=Math.min(Math.max(0,page),totalPages-1),start=current*pageSize,items=executable.slice(start,start+pageSize);return {current,totalPages,items,hasPrevious:current>0,hasNext:current+1<totalPages};}
+export function poolListingPage(listing:PoolListing,page:number,pageSize=POOL_PAGE_SIZE){const totalPages=Math.max(1,Math.ceil(listing.items.length/pageSize)),current=Math.min(Math.max(0,page),totalPages-1),start=current*pageSize,items=listing.items.slice(start,start+pageSize);return {current,totalPages,items,hasPrevious:current>0,hasNext:current+1<totalPages};}
 export function unavailablePoolListingPage(listing:PoolListing,page:number,pageSize=POOL_PAGE_SIZE){const items=unavailablePoolListingItems(listing),totalPages=Math.max(1,Math.ceil(items.length/pageSize)),current=Math.min(Math.max(0,page),totalPages-1),start=current*pageSize;return {current,totalPages,items:items.slice(start,start+pageSize),hasPrevious:current>0,hasNext:current+1<totalPages};}
-function foundCount(counts:PoolListing['counts']){return counts.v4Eligible+counts.v3Eligible+(counts.zeroLiquidity??0)+(counts.checking??0)+(counts.notInitialized??0)+(counts.evidenceUnavailable??0)+(counts.unsupported??0);}
+function foundCount(counts:PoolListing['counts']){return counts.v4Eligible+(counts.zeroLiquidity??0)+(counts.checking??0)+(counts.notInitialized??0)+(counts.evidenceUnavailable??0)+(counts.unsupported??0);}
 function compactUsd(value:number|null|undefined){
  if(!Number.isFinite(value))return 'unavailable';
  const amount=Number(value),units=[[1_000_000_000,'B'],[1_000_000,'M'],[1_000,'K']] as const;

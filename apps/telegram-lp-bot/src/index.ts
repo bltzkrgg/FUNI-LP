@@ -1028,6 +1028,7 @@ function persistPoolListing(input: {
   flow: TelegramFlowSession;
   tokenAddress: Address;
   tokenSymbol: string;
+  tokenName?: string;
   v4Candidates: ReturnType<typeof cachedV4PoolsForToken>["candidates"];
   v3Rows: Record<string, unknown>[];
 }) {
@@ -1115,35 +1116,56 @@ function persistPoolListing(input: {
           );
       return { id, row };
     });
+  const v4SelectionByPoolId = new Map(v4Selections.map(({ id, candidate }) => [candidate.poolId.toLowerCase(), id])),
+    v4Pair = (candidate: (typeof input.v4Candidates)[number]) => {
+      const metadataName = (candidate.target as { name?: string }).name,
+        displayName = candidate.target.address.toLowerCase() === input.tokenAddress.toLowerCase()
+          ? tokenListingName(input.tokenSymbol, input.tokenName ?? metadataName)
+          : tokenListingName(candidate.target.symbol, metadataName);
+      return `${displayName}/${candidate.funding.symbol}`;
+    },
+    v4Section = (candidate: (typeof input.v4Candidates)[number]): PoolListingItem["section"] =>
+      candidate.executionEligible
+        ? "v4_eligible"
+        : candidate.uiState === "SUPPORTED_NO_ACTIVE_LIQUIDITY"
+          ? "v4_no_active"
+          : candidate.uiState === "CHECKING" || candidate.uiState === "TEMPORARILY_UNAVAILABLE"
+            ? "v4_checking"
+            : "v4_unavailable",
+    v4Status = (candidate: (typeof input.v4Candidates)[number]) =>
+      candidate.executionEligible
+        ? "✅ Ready"
+        : candidate.uiState === "SUPPORTED_NO_ACTIVE_LIQUIDITY"
+          ? "⚪ No active liquidity"
+          : candidate.uiState === "CHECKING" || candidate.uiState === "TEMPORARILY_UNAVAILABLE"
+            ? "🟡 Checking"
+            : "❌ Unsupported",
+    v4Reason = (candidate: (typeof input.v4Candidates)[number]) =>
+      candidate.executionEligible
+        ? undefined
+        : candidate.uiState === "SUPPORTED_NO_ACTIVE_LIQUIDITY"
+          ? "Fresh StateView active liquidity is zero."
+          : candidate.uiState === "CHECKING" || candidate.uiState === "TEMPORARILY_UNAVAILABLE"
+            ? "Waiting for fresh worker evidence."
+            : candidate.blockers[0] ?? candidate.uiReason ?? "Execution is blocked by current FUNI policy.";
   const items: PoolListingItem[] = [
-      ...v4Selections.map(({ id, candidate }, rank) => ({
-        section: "v4_eligible" as const,
+      ...input.v4Candidates.map((candidate, rank) => {
+        const id = v4SelectionByPoolId.get(candidate.poolId.toLowerCase());
+        return {
+        section: v4Section(candidate),
         rank,
         label: v4PoolSelectionLabel(candidate.target.symbol,candidate.funding.symbol,candidate.feeLabel),
-        data: `v4-pool:${id}`,
-        pair: `${candidate.target.symbol}/${candidate.funding.symbol}`,
+        data: id ? `v4-pool:${id}` : "",
+        pair: v4Pair(candidate),
         protocol: "v4" as const,
         feeLabel: candidate.feeLabel,
         tvlUsd: candidate.trustedTvlUsd,
         volume24hUsd: null,
         priceDiffPct: null,
-        statusLabel: "✅ Ready",
-      })),
-      ...selections.map(({ id, row }, rank) => ({
-        section: "v3_eligible" as const,
-        rank,
-        label: compactLabel(
-          `v3 · cached · fee ${(Number(row.fee) / 10_000).toFixed(2)}%`,
-        ),
-        data: `pool:${input.flow.sessionId}:${id}`,
-        pair: "cached pool",
-        protocol: "v3" as const,
-        feeLabel: `${(Number(row.fee) / 10_000).toFixed(2)}%`,
-        tvlUsd: Number.isFinite(Number(row.tvl_usd)) ? Number(row.tvl_usd) : null,
-        volume24hUsd: null,
-        priceDiffPct: null,
-        statusLabel: "✅ Ready",
-      })),
+        statusLabel: v4Status(candidate),
+        reason: v4Reason(candidate),
+        };
+      }),
     ],
     unavailableItems: PoolListingItem[] = [...notInitializedV4.map((candidate,rank)=>({section:'v4_unavailable' as const,rank,label:compactLabel(`NOT INITIALIZED · fresh StateView · ${candidate.target.symbol}/${candidate.funding.symbol}`),data:''})),...evidenceUnavailableV4.map((candidate,rank)=>({section:'v4_unavailable' as const,rank:rank+notInitializedV4.length,label:compactLabel(`EVIDENCE UNAVAILABLE · ${candidate.uiReason??'REFRESH_FAILED'} · ${candidate.target.symbol}/${candidate.funding.symbol}`),data:''})),...unsupportedV4.map((candidate,rank)=>({section:'v4_unavailable' as const,rank:rank+notInitializedV4.length+evidenceUnavailableV4.length,label:compactLabel(`UNSUPPORTED · ${candidate.blockers[0]??candidate.uiReason??'EXECUTION BLOCKED'} · ${candidate.target.symbol}/${candidate.funding.symbol}`),data:''}))],
     listing: PoolListing = {
@@ -1153,7 +1175,7 @@ function persistPoolListing(input: {
       unavailableItems,
       counts: {
         v4Eligible: v4Selections.length,
-        v3Eligible: selections.length,
+        v3Eligible: 0,
         v4Unavailable: unsupportedV4.length,
         zeroLiquidity: input.v4Candidates.filter(candidate=>candidate.uiState==='SUPPORTED_NO_ACTIVE_LIQUIDITY').length,
         checking: input.v4Candidates.filter(candidate=>candidate.uiState==='CHECKING'||candidate.uiState==='TEMPORARILY_UNAVAILABLE').length,
@@ -1209,6 +1231,17 @@ async function dexV4PoolLiquidityLine(poolId: string, key: V4PoolKey) {
 }
 function directLookupTokenDisplay(db:SqliteLedgerRepository,token:Address){const cached=db.tokenMetadata(token);if(cached?.symbol)return cached;return db.db.prepare("SELECT symbol,name FROM gmgn_robinhood_observations WHERE lower(token_address)=lower(?) AND symbol IS NOT NULL ORDER BY observed_at_ms DESC LIMIT 1").get(token) as {symbol:string;name:string|null}|undefined;}
 function directLookupTargetSymbol<T extends {target:{symbol:string}}>(candidates:readonly T[],symbol:string){return candidates.map(candidate=>({...candidate,target:{...candidate.target,symbol}}));}
+function isAddressFallbackLabel(value: unknown) {
+  return typeof value === "string" && /^0x[a-fA-F0-9]{4,}…?$/.test(value.trim());
+}
+function tokenListingName(symbol: string, name?: string | null) {
+  const cleanSymbol = symbol.trim(),
+    cleanName = String(name ?? "").trim();
+  if (cleanName && isAddressFallbackLabel(cleanSymbol)) return compactLabel(cleanName, 24);
+  if (cleanName && cleanName.toLowerCase() !== cleanSymbol.toLowerCase())
+    return compactLabel(`${cleanSymbol} (${cleanName})`, 32);
+  return cleanSymbol;
+}
 async function beginToken(ctx: any, address: string, pasteReceivedAtMs=Date.now()) {
   const tokenAddress = getAddress(address), interactionId = randomUUID(), started = Date.now(),
     existing = loadFlow(ctx),
@@ -1228,13 +1261,14 @@ async function beginToken(ctx: any, address: string, pasteReceivedAtMs=Date.now(
   log("telegram_interactive_stage", {interactionId,interactionType:"TOKEN_LOOKUP",requestId:interactionId,stage:"SESSION_ACCEPTED_AND_FIRST_PAINT",startedAtMs:started,endedAtMs:firstUiResponseAtMs,elapsedMs:firstUiResponseAtMs-started,dbWaitMs:sessionAcceptedAtMs-started,rpcWaitMs:0,provider:"telegram",queueWaitMs:0,cache:"PENDING",outcome:"PAINTED",messageId:Number(message.message_id)});
   log('telegram_direct_lookup_first_response',{interactionId,token:tokenAddress,pasteReceivedAtMs,firstResponseStartedAtMs,firstUiResponseAtMs,firstUiResponseMs:firstUiResponseAtMs-pasteReceivedAtMs,messageId:Number(message.message_id),mainnetTransactionsSent:0});
   const cacheStartedAtMs = Date.now(), lookupDb = repo();
-  let v4Lookup:ReturnType<typeof cachedV4PoolsForToken>, allV4:ReturnType<typeof cachedV4PoolsForToken>["candidates"], v3Rows:ReturnType<SqliteLedgerRepository["v3CachedPoolsForToken"]>, tokenSymbol:string, otherQuoteActive:number;
+  let v4Lookup:ReturnType<typeof cachedV4PoolsForToken>, allV4:ReturnType<typeof cachedV4PoolsForToken>["candidates"], v3Rows:ReturnType<SqliteLedgerRepository["v3CachedPoolsForToken"]>, tokenSymbol:string, tokenName:string|undefined, otherQuoteActive:number;
   try {
     v4Lookup = cachedV4PoolsForToken({ repo: lookupDb, token: tokenAddress });
     const presentedV4 = applyDirectLookupCandidatePresentation(lookupDb,tokenAddress,v4Lookup.candidates),
-      meta = directLookupTokenDisplay(lookupDb,tokenAddress);
+    meta = directLookupTokenDisplay(lookupDb,tokenAddress);
     v3Rows = lookupDb.v3CachedPoolsForToken(tokenAddress, [robinhoodMainnet.assets.USDG,robinhoodMainnet.assets.WETH]);
     tokenSymbol = String(meta?.symbol ?? `${tokenAddress.slice(0, 6)}…`);
+    tokenName = meta?.name ? String(meta.name) : undefined;
     allV4 = directLookupTargetSymbol(presentedV4,tokenSymbol);
     otherQuoteActive = Number((lookupDb.db.prepare("SELECT COUNT(*) AS count FROM v4_pool_registry WHERE initialized=1 AND CAST(active_liquidity_raw AS INTEGER)>0 AND ((lower(currency0)=lower(?) AND lower(currency1) NOT IN (lower(?),lower(?))) OR (lower(currency1)=lower(?) AND lower(currency0) NOT IN (lower(?),lower(?))))").get(tokenAddress,robinhoodMainnet.assets.USDG,robinhoodMainnet.assets.WETH,tokenAddress,robinhoodMainnet.assets.USDG,robinhoodMainnet.assets.WETH) as { count: number }).count);
   } finally { lookupDb.close(); }
@@ -1259,6 +1293,7 @@ async function beginToken(ctx: any, address: string, pasteReceivedAtMs=Date.now(
           flow,
           tokenAddress,
           tokenSymbol,
+          tokenName,
           v4Candidates,
           v3Rows,
         });
@@ -1350,7 +1385,7 @@ async function beginToken(ctx: any, address: string, pasteReceivedAtMs=Date.now(
     initialListing: ReturnType<typeof persistPoolListing>["render"] | null = null;
   if (v3Rows.length || v4Candidates.length) {
     const persisted = telegramFlowWrite("persistPoolListing", db =>
-        persistPoolListing({db,userId:owner(ctx),chatId:chat(ctx),flow:active,tokenAddress,tokenSymbol,v4Candidates,v3Rows})),
+        persistPoolListing({db,userId:owner(ctx),chatId:chat(ctx),flow:active,tokenAddress,tokenSymbol,tokenName,v4Candidates,v3Rows})),
       state = {...persisted.state,poolHydrationPending:!lookup.cacheHit,directLookupRequestId:lookup.request.id,directLookupRevision:lookup.request.revision,directLookupInteractionId:interactionId},
       listed = advanceFlow(ctx, active, state, "initial direct lookup pool listing persisted");
     if (!listed) return unavailableFlow(ctx, "stale");
@@ -1401,7 +1436,7 @@ function renderPoolListing(ctx: any, flow: TelegramFlowSession, page: number) {
   if (!listing || !Array.isArray(listing.items))
     return unavailableFlow(ctx, "stale");
   const view = poolListingPage(listing, page),
-    rows = view.items.map((item) => [{ label: item.label, data: item.data }]);
+    rows = view.items.filter((item) => item.data).map((item) => [{ label: item.label, data: item.data }]);
   const navigation = [
     ...(view.hasPrevious
       ? [
@@ -1436,7 +1471,7 @@ function poolListingRender(
   page: number,
 ) {
   const view = poolListingPage(listing, page),
-    rows = view.items.map((item) => [{ label: item.label, data: item.data }]),
+    rows = view.items.filter((item) => item.data).map((item) => [{ label: item.label, data: item.data }]),
     navigation = [
       ...(view.hasPrevious
         ? [
@@ -1553,7 +1588,8 @@ async function deliverDirectLookupOutbox() {
             ? undefined
             : Number(subscriber.base_flow_revision),
           meta = directLookupTokenDisplay(renderDb,getAddress(payload.token)),
-          symbol = String(meta?.symbol ?? `${payload.token.slice(0, 6)}…`);
+          symbol = String(meta?.symbol ?? `${payload.token.slice(0, 6)}…`),
+          tokenName = meta?.name ? String(meta.name) : undefined;
         const applyOutboxFlowState = (nextState: Record<string, unknown>) => {
           if (!flow || baseFlowRevision === undefined) {
             log("telegram_direct_lookup_stale_async_write_prevented", {
@@ -1640,6 +1676,7 @@ async function deliverDirectLookupOutbox() {
               flow,
               tokenAddress: getAddress(payload.token),
               tokenSymbol: symbol,
+              tokenName,
               v4Candidates: v4,
               v3Rows: v3,
             })});
@@ -1656,7 +1693,7 @@ async function deliverDirectLookupOutbox() {
             freshExecutable = presented.filter(candidate=>candidate.executionEligible);
           if (freshExecutable.length) {
             const v4 = [...await rankV4CandidatesForTelegram(freshExecutable),...presented.filter(candidate=>!candidate.executionEligible)],
-              persisted = retrySqliteBusySync({operation:"telegram_direct_lookup_listing_persist",log,run:()=>persistPoolListing({db:renderDb,userId:String(event.user_id),chatId:String(event.chat_id),flow,tokenAddress:getAddress(payload.token),tokenSymbol:symbol,v4Candidates:v4,v3Rows:renderDb.v3CachedPoolsForToken(payload.token,[robinhoodMainnet.assets.USDG,robinhoodMainnet.assets.WETH])})});
+              persisted = retrySqliteBusySync({operation:"telegram_direct_lookup_listing_persist",log,run:()=>persistPoolListing({db:renderDb,userId:String(event.user_id),chatId:String(event.chat_id),flow,tokenAddress:getAddress(payload.token),tokenSymbol:symbol,tokenName,v4Candidates:v4,v3Rows:renderDb.v3CachedPoolsForToken(payload.token,[robinhoodMainnet.assets.USDG,robinhoodMainnet.assets.WETH])})});
             render = persisted.render;
             applyOutboxFlowState(persisted.state);
           } else render = terminalLookupRender(payload.terminalStatus,symbol,payload.token,payload.reasonCode,directLookupEvidenceSummary(payload.rpcAttribution));
