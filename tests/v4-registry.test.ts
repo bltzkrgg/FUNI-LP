@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -26,6 +26,21 @@ describe('durable v4 registry',()=>{
  it('requires fresh positive active liquidity but not TVL for indexed eligibility',async()=>{const repo=fixture();try{repo.upsertV4RegistryPool({poolId:poolId(key),currency0, currency1,initializeFeeRaw:key.fee,tickSpacing:key.tickSpacing,hooks:key.hooks,initializationBlock:10n,dynamicFee:false,staticFeePips:key.fee,hookClassification:'ZERO_HOOK'});repo.refreshV4RegistryPool({poolId:poolId(key),sqrtPriceX96:2n**96n,tick:0,liquidity:1n,protocolFee:0,lpFeePips:key.fee,initialized:true,refreshBlock:20n,validationStatus:'ELIGIBLE',blockers:[]});const before=repo.v4RegistryCursor(),now=Date.now();repo.updateV4RegistryTvl(poolId(key),{status:'missing'});const result=cachedV4PoolsForToken({repo,token:currency0,fundingAssets:[currency1],now});expect(result.candidates[0]!.executionEligible).toBe(true);expect(repo.v4RegistryCursor()).toEqual(before);repo.refreshV4RegistryPool({poolId:poolId(key),sqrtPriceX96:2n**96n,tick:0,liquidity:0n,protocolFee:0,lpFeePips:key.fee,initialized:true,refreshBlock:20n,validationStatus:'BLOCKED',blockers:['ZERO_ACTIVE_LIQUIDITY']});expect(cachedV4PoolsForToken({repo,token:currency0,fundingAssets:[currency1],now}).candidates[0]!.executionEligible).toBe(false);}finally{repo.close();}});
  it('hides zero-active-liquidity pools despite otherwise fresh TVL and reports the terminal state',()=>{const repo=fixture();try{repo.upsertV4RegistryPool({poolId:poolId(key),currency0,currency1,initializeFeeRaw:key.fee,tickSpacing:key.tickSpacing,hooks:key.hooks,initializationBlock:10n,dynamicFee:false,staticFeePips:key.fee,hookClassification:'ZERO_HOOK'});repo.refreshV4RegistryPool({poolId:poolId(key),sqrtPriceX96:2n**96n,tick:0,liquidity:0n,protocolFee:0,lpFeePips:key.fee,initialized:true,refreshBlock:20n,validationStatus:'BLOCKED',blockers:['ZERO_ACTIVE_LIQUIDITY']});const now=Date.now();repo.updateV4RegistryTvl(poolId(key),{tvlUsd:1,tvlSource:'uniswap-test',observedAtMs:now,freshUntilMs:now+60_000,status:'fresh'});const candidate=cachedV4PoolsForToken({repo,token:currency0,fundingAssets:[currency1],now}).candidates[0]!;expect(candidate.executionEligible).toBe(false);expect(candidate.uiState).toBe('SUPPORTED_NO_ACTIVE_LIQUIDITY');}finally{repo.close();}});
  it('keeps canonical structural blockers ahead of simultaneous zero active liquidity',()=>{const repo=fixture(),hook=getAddress('0x0000000000000000000000000000000000000003'),extreme={...key,fee:50_001},nonzero={...key,hooks:hook};try{for(const value of [extreme,nonzero]){repo.upsertV4RegistryPool({poolId:poolId(value),currency0:value.currency0,currency1:value.currency1,initializeFeeRaw:value.fee,tickSpacing:value.tickSpacing,hooks:value.hooks,initializationBlock:10n,dynamicFee:false,staticFeePips:value.fee,hookClassification:value.hooks===zeroAddress?'ZERO_HOOK':'UNSUPPORTED_NONZERO_HOOK'});repo.refreshV4RegistryPool({poolId:poolId(value),sqrtPriceX96:2n**96n,tick:0,liquidity:0n,protocolFee:0,lpFeePips:value.fee,initialized:true,refreshBlock:20n,validationStatus:'BLOCKED',blockers:['ZERO_ACTIVE_LIQUIDITY']});}const candidates=cachedV4PoolsForToken({repo,token:currency0,fundingAssets:[currency1]}).candidates;expect(candidates).toHaveLength(2);expect(candidates.map(candidate=>candidate.blockers[0]).sort()).toEqual(['EXTREME_STATIC_FEE','NONZERO_HOOK_UNSUPPORTED']);expect(candidates.find(candidate=>candidate.blockers[0]==='EXTREME_STATIC_FEE')?.uiState).toBe('UNSUPPORTED:EXTREME_STATIC_FEE');expect(candidates.find(candidate=>candidate.blockers[0]==='NONZERO_HOOK_UNSUPPORTED')?.uiState).toBe('UNSUPPORTED:NONZERO_HOOK_UNSUPPORTED');}finally{repo.close();}});
+});
+
+describe('v4 registry CLI wiring',()=>{
+ it('exposes explicit bootstrap through the existing helper and log-capable RPC',()=>{
+  const source=readFileSync('apps/cli/src/index.ts','utf8'),start=source.indexOf('if (command === "v4-pool-registry-bootstrap")'),end=source.indexOf('if (command === "v4-pool-registry-sync")',start),handler=source.slice(start,end),help=source.slice(source.indexOf('commands: ['),source.indexOf('transactionAuthority'));
+  expect(source).toContain('bootstrapV4PoolRegistry');
+  expect(help).toContain('"v4-pool-registry-bootstrap"');
+  expect(handler).toContain('usage: v4-pool-registry-bootstrap <fromBlock> <toBlock>');
+  expect(handler).toContain('bootstrapV4PoolRegistry');
+  expect(handler).toContain('rpc: logsRpc');
+  expect(handler).toContain('parseBlockArgument(process.argv[3], "fromBlock")');
+  expect(handler).toContain('parseBlockArgument(process.argv[4], "toBlock")');
+  expect(handler).toContain('finally { repository.close(); }');
+  expect(handler).not.toMatch(/initializeV4RegistryCursor|INSERT\s+INTO\s+v4_pool_discovery_cursor/i);
+ });
 });
 
 describe('v4 fee, hooks, and ranking',()=>{

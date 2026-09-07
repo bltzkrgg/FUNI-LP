@@ -27,6 +27,7 @@ import {
   walletStatus,
 } from "./runtime.js";
 import {
+  bootstrapV4PoolRegistry,
   refreshV4RegistryPool,
   syncV4PoolRegistry,
   v4PoolsForToken,
@@ -64,6 +65,11 @@ const output = (value: unknown) =>
 const openRepository = () =>
   new SqliteLedgerRepository(runtimePaths.databasePath, { busyTimeoutMs: 5_000 });
 const ensureDatabase = () => migrateSqlite(runtimePaths.databasePath, migrations);
+const parseBlockArgument = (value: string | undefined, name: string) => {
+  if (!value || !/^[0-9]+$/.test(value))
+    throw new Error(`V4_REGISTRY_BLOCK_ARGUMENT_INVALID:${name}`);
+  return BigInt(value);
+};
 
 async function main() {
   if (command === "help") {
@@ -74,7 +80,8 @@ async function main() {
         "runtime-status", "bot-preflight", "wallet-status", "wallet-preflight",
         "allowance-audit", "reconcile-all", "v4-pool-registry-status",
         "reconcile-position", "v4-position-import", "v3-swap-readiness",
-        "v4-pool-registry-sync", "v4-pools-for-token", "v4-pool-refresh",
+        "v4-pool-registry-bootstrap", "v4-pool-registry-sync",
+        "v4-pools-for-token", "v4-pool-refresh",
         "v4-position-inspect", "v4-position-reconcile", "v4-pnl-audit",
         "v4-position-lifecycle-audit",
         "resume-reposition-status", "resume-reposition",
@@ -296,6 +303,19 @@ async function main() {
     const repository = openRepository();
     try { return output(await v4RegistryStatus({ repo: repository, rpc })); }
     finally { repository.close(); }
+  }
+  if (command === "v4-pool-registry-bootstrap") {
+    if (process.argv.length !== 5)
+      throw new Error("usage: v4-pool-registry-bootstrap <fromBlock> <toBlock>");
+    const repository = openRepository();
+    try {
+      return output(await bootstrapV4PoolRegistry({
+        repo: repository,
+        rpc: logsRpc,
+        fromBlock: parseBlockArgument(process.argv[3], "fromBlock"),
+        toBlock: parseBlockArgument(process.argv[4], "toBlock"),
+      }));
+    } finally { repository.close(); }
   }
   if (command === "v4-pool-registry-sync") {
     const repository = openRepository();
