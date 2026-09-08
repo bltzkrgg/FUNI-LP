@@ -204,6 +204,15 @@ import {
 import { FUNI_COMMAND_MENU, HELP_TEXT, START_TEXT } from "./command-menu.js";
 import { registerMultichainUx } from "./multichain-ux.js";
 import {
+  applyDryRunMode,
+  applyRuntimeConfigOverrides,
+  applyRuntimeConfigValue,
+  formatRuntimeConfig,
+  parseRuntimeConfigCommand,
+  persistRuntimeConfigValue,
+  runtimeConfigHelp,
+} from "./runtime-config.js";
+import {
   aggregateFuniOpenLifecyclePnl,
   displayEquity,
   displayLifecycle,
@@ -281,6 +290,7 @@ type BidLadderInteractiveWork = { updateId:string; generation:number; progressMe
 const bidLadderDirectLiveInFlight = new Map<string, BidLadderInteractiveWork>();
 const bidLadderLiveOpenInFlight = new Map<string, Promise<unknown>>();
 const bidLadderPreviewAuthorities = new Map<string,{requestId:string;userId:string;chatId:string;sessionId?:string;expiresAtMs:number}>();
+const pendingRuntimeConfigLiveConfirms = new Map<string, { userId: string; chatId: string; expiresAtMs: number }>();
 if (!allowed.size)
   throw new Error(
     "TELEGRAM_ALLOWED_USER_IDS must contain the single operator user ID",
@@ -324,6 +334,15 @@ function startRuntime() {
     databasePath: runtimePaths.databasePath,
     log,
   });
+  if (result.status === "READY") {
+    const db = repo();
+    try {
+      const applied = applyRuntimeConfigOverrides(db, env);
+      if (applied.length) log("telegram_runtime_config_overrides_applied", { keys: applied });
+    } finally {
+      db.close();
+    }
+  }
   if (result.status === "READY") {
     log("telegram_session_recovery", {
       expired: result.expired,
@@ -6069,6 +6088,44 @@ bot.command("canary_status", (ctx) => {
     db.close();
   }
 });
+bot.command("config", async (ctx) => {
+  if (!allowed.has(owner(ctx))) return ctx.reply("CONFIG_BLOCKED\nOperator is not allowlisted.");
+  const parsed = parseRuntimeConfigCommand(ctx.match?.trim() ?? ""),
+    db = repo();
+  try {
+    if (parsed.type === "show") return ctx.reply(formatRuntimeConfig(env, db));
+    if (parsed.type === "help") return ctx.reply(runtimeConfigHelp());
+    if (parsed.type === "invalid") return ctx.reply(`CONFIG_INVALID\n${parsed.message}\n\n${runtimeConfigHelp()}`);
+    if (parsed.type === "set") {
+      persistRuntimeConfigValue(db, owner(ctx), parsed.spec, parsed.value);
+      applyRuntimeConfigValue(env, parsed.spec, parsed.value);
+      log("telegram_runtime_config_updated", { key: parsed.spec.key, actor: reduced(owner(ctx)) });
+      return ctx.reply(`CONFIG_UPDATED\n${parsed.spec.alias}: ${parsed.value}\nApplied immediately and persisted.`);
+    }
+    if (parsed.dryRun) {
+      applyDryRunMode(db, env, owner(ctx), true);
+      log("telegram_runtime_config_safe_mode_enabled", { actor: reduced(owner(ctx)) });
+      return ctx.reply("SAFE_MODE_ENABLED\nexecution=false · dry_run=true · emergency_pause=true\nApplied immediately and persisted.");
+    }
+    const confirmationId = randomUUID().replace(/-/g, "").slice(0, 18);
+    pendingRuntimeConfigLiveConfirms.set(confirmationId, {
+      userId: owner(ctx),
+      chatId: chat(ctx),
+      expiresAtMs: Date.now() + 60_000,
+    });
+    return ctx.reply(
+      [
+        "LIVE_MODE_CONFIRMATION_REQUIRED",
+        "This will allow real transactions:",
+        "execution=true · dry_run=false · emergency_pause=false",
+        "Tap confirm within 60 seconds. No transaction is sent by this config change.",
+      ].join("\n"),
+      { reply_markup: keyboard([[{ label: "Confirm Live Mode", data: `config-live-confirm:${confirmationId}` }]]) },
+    );
+  } finally {
+    db.close();
+  }
+});
 bot.command("range", async (ctx) => {
   const value = Number(ctx.match?.trim()),
     flow = loadFlow(ctx);
@@ -6407,6 +6464,24 @@ bot.callbackQuery(/^v4-action:(\d+):(collect|25|50|75|all)$/, async (ctx) => {
 });
 bot.callbackQuery(/^v4-confirm:([^:]+)$/, async (ctx) => {
   await v4ManagementConfirm(ctx, ctx.match[1]!);
+});
+bot.callbackQuery(/^config-live-confirm:([0-9a-f]{18})$/, async (ctx) => {
+  const confirmationId = ctx.match[1]!,
+    pending = pendingRuntimeConfigLiveConfirms.get(confirmationId);
+  await acknowledgeCallback(ctx);
+  if (!pending || pending.userId !== owner(ctx) || pending.chatId !== chat(ctx) || pending.expiresAtMs <= Date.now()) {
+    pendingRuntimeConfigLiveConfirms.delete(confirmationId);
+    return ctx.reply("LIVE_MODE_CONFIRMATION_EXPIRED\nRun /config dry_run false again.");
+  }
+  pendingRuntimeConfigLiveConfirms.delete(confirmationId);
+  const db = repo();
+  try {
+    applyDryRunMode(db, env, owner(ctx), false);
+    log("telegram_runtime_config_live_mode_enabled", { actor: reduced(owner(ctx)), mainnetTransactionsSent: 0 });
+    return ctx.reply("LIVE_MODE_ENABLED\nexecution=true · dry_run=false · emergency_pause=false\nNo transaction was sent by this config change.");
+  } finally {
+    db.close();
+  }
 });
 bot.on("callback_query:data", async (ctx) => {
   try {

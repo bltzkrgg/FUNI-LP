@@ -2539,6 +2539,16 @@ export class SqliteLedgerRepository {
       manualPauseAt: new Date().toISOString(),
     });
   }
+  runtimeConfigOverrides() {
+    return this.db.prepare("SELECT key,value,value_type,actor,updated_at_ms FROM telegram_runtime_config ORDER BY key").all() as
+      Array<{ key: string; value: string; value_type: string; actor: string; updated_at_ms: number }>;
+  }
+  setRuntimeConfigOverride(input: { key: string; value: string; valueType: "boolean" | "number" | "integer"; actor: string; updatedAtMs?: number }) {
+    const at = input.updatedAtMs ?? Date.now();
+    this.db
+      .prepare("INSERT INTO telegram_runtime_config(key,value,value_type,actor,updated_at_ms) VALUES(?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,value_type=excluded.value_type,actor=excluded.actor,updated_at_ms=excluded.updated_at_ms")
+      .run(input.key, input.value, input.valueType, input.actor, at);
+  }
   canaryBudget() {
     return this.db.prepare("SELECT * FROM canary_budget WHERE id=1").get() as
       Record<string, unknown> | undefined;
