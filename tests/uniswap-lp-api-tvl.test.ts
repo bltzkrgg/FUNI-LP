@@ -67,6 +67,51 @@ describe("Uniswap LP API TVL source", () => {
     expect(result).toMatchObject({ status: "fresh", tvlUsd: 12_000 });
   });
 
+  it("falls back to poolParameters when the LP API does not resolve a v4 pool id reference", async () => {
+    process.env.UNISWAP_LP_API_KEY = "key";
+    const calls: RequestInit[] = [];
+    const result = await configuredUniswapLpApiTvl(
+      "v4",
+      pool,
+      {
+        currency0: robinhoodMainnet.assets.USDG,
+        currency1: token,
+        fee: 25_000,
+        tickSpacing: 200,
+        hooks: "0x0000000000000000000000000000000000000000",
+      },
+      async (_url, init) => {
+        calls.push(init!);
+        if (calls.length === 1) return Response.json({ pools: [] });
+        return Response.json({
+          pools: [{
+            tokenAddressA: robinhoodMainnet.assets.USDG,
+            tokenAddressB: token,
+            tokenDecimalsA: 6,
+            tokenDecimalsB: 6,
+            fee: "25000",
+            token0Reserves: "100000000",
+            token1Reserves: "50000000",
+            sqrtRatioX96: q96,
+          }],
+        });
+      },
+    );
+    expect(result).toMatchObject({ status: "fresh", tvlUsd: 150 });
+    expect(JSON.parse(String(calls[1]!.body))).toEqual({
+      protocol: "V4",
+      chainId: 4663,
+      poolParameters: {
+        chainId: 4663,
+        tokenAddressA: robinhoodMainnet.assets.USDG.toLowerCase(),
+        tokenAddressB: token.toLowerCase(),
+        fee: "25000",
+        tickSpacing: 200,
+        hookAddress: "0x0000000000000000000000000000000000000000",
+      },
+    });
+  });
+
   it("fails closed when pool_info cannot provide enough valuation evidence", async () => {
     process.env.UNISWAP_LP_API_KEY = "key";
     const result = await configuredUniswapLpApiTvl("v4", pool, async () => Response.json({

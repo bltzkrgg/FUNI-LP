@@ -4,6 +4,7 @@ export const TVL_FRESHNESS_TTL_MS=Number(process.env.UNISWAP_TVL_TTL_MS??60_000)
 export type TrustedTvl={tvlUsd:number;tvlSource:string;observedAtMs:number;freshUntilMs:number;status:'fresh'};
 export type TvlResult=TrustedTvl|{status:'missing'|'invalid';reason:string};
 export const UNISWAP_LP_POOL_INFO_URL="https://liquidity.api.uniswap.org/lp/pool_info";
+export type UniswapLpPoolLookup={currency0:unknown;currency1:unknown;fee:unknown;tickSpacing:unknown;hooks:unknown};
 
 const strictTvlQuery='query StrictTvl($id: String!) { pool(id: $id) { totalValueLockedUSD tvlUsd observedAt timestamp } }',
   compatibleTvlQuery='query CompatibleTvl($id: String!) { pool(id: $id) { totalValueLockedUSD } _meta { block { number timestamp } } }';
@@ -16,6 +17,8 @@ type UniswapLpPoolInfo={
   tokenAmountB?:unknown;
   tokenDecimalsA?:unknown;
   tokenDecimalsB?:unknown;
+  fee?:unknown;
+  hookAddress?:unknown;
   sqrtRatioX96?:unknown;
   token0Reserves?:unknown;
   token1Reserves?:unknown;
@@ -76,24 +79,49 @@ function deriveUsdTvlFromPoolInfo(pool:UniswapLpPoolInfo){
   const tvlUsd=amountA*usdA+amountB*usdB;
   return finitePositive(tvlUsd)?tvlUsd:null;
 }
+function poolInfoMatchesLookup(pool:UniswapLpPoolInfo,lookup?:UniswapLpPoolLookup){
+  if(!lookup)return false;
+  const tokenA=normalizedAddress(pool.tokenAddressA),tokenB=normalizedAddress(pool.tokenAddressB),currency0=normalizedAddress(lookup.currency0),currency1=normalizedAddress(lookup.currency1);
+  if(!tokenA||!tokenB||!currency0||!currency1)return false;
+  const samePair=(tokenA===currency0&&tokenB===currency1)||(tokenA===currency1&&tokenB===currency0),
+    sameFee=Number(pool.fee)===Number(lookup.fee);
+  return samePair&&sameFee;
+}
+function poolInfoFrom(body:any,pool:string,lookup?:UniswapLpPoolLookup){
+  const pools=Array.isArray(body?.pools)?body.pools as UniswapLpPoolInfo[]:[];
+  return pools.find(item=>String(item?.poolReferenceIdentifier??"").toLowerCase()===pool.toLowerCase())??pools.find(item=>poolInfoMatchesLookup(item,lookup));
+}
+function poolParametersFrom(lookup?:UniswapLpPoolLookup){
+  if(!lookup)return null;
+  const currency0=normalizedAddress(lookup.currency0),currency1=normalizedAddress(lookup.currency1),hooks=normalizedAddress(lookup.hooks),
+    fee=Number(lookup.fee),tickSpacing=Number(lookup.tickSpacing);
+  if(!currency0||!currency1||!hooks||!Number.isSafeInteger(fee)||fee<0||!Number.isSafeInteger(tickSpacing)||tickSpacing<1)return null;
+  return {chainId:robinhoodMainnet.chainId,tokenAddressA:currency0,tokenAddressB:currency1,fee:String(fee),tickSpacing,hookAddress:hooks};
+}
 
-export async function configuredUniswapLpApiTvl(protocol:"v3"|"v4",pool:string,fetcher:typeof fetch=fetch):Promise<TvlResult>{
+export async function configuredUniswapLpApiTvl(protocol:"v3"|"v4",pool:string,lookupOrFetcher?:UniswapLpPoolLookup|typeof fetch,fetcherArg?:typeof fetch):Promise<TvlResult>{
+  const lookup=typeof lookupOrFetcher==="function"?undefined:lookupOrFetcher,fetcher=typeof lookupOrFetcher==="function"?lookupOrFetcher:fetcherArg??fetch;
   const apiKey=process.env.UNISWAP_LP_API_KEY?.trim();
   if(!apiKey)return {status:"missing",reason:"UNISWAP_LP_API_KEY_NOT_CONFIGURED"};
   if(!Number.isSafeInteger(TVL_FRESHNESS_TTL_MS)||TVL_FRESHNESS_TTL_MS<1)return {status:"invalid",reason:"UNISWAP_TVL_TTL_MS_INVALID"};
   const endpoint=process.env.UNISWAP_LP_API_URL?.trim()||UNISWAP_LP_POOL_INFO_URL;
   try{
-    const response=await fetcher(endpoint,{method:"POST",headers:{"content-type":"application/json",accept:"application/json","x-api-key":apiKey},body:JSON.stringify({protocol:protocol.toUpperCase(),chainId:robinhoodMainnet.chainId,poolReferences:[{chainId:robinhoodMainnet.chainId,referenceIdentifier:pool.toLowerCase()}]})});
-    const body=await response.json() as any;
-    const poolInfo=(Array.isArray(body?.pools)?body.pools:[]).find((item:UniswapLpPoolInfo)=>String(item?.poolReferenceIdentifier??"").toLowerCase()===pool.toLowerCase()) as UniswapLpPoolInfo|undefined;
+    const post=(payload:Record<string,unknown>)=>fetcher(endpoint,{method:"POST",headers:{"content-type":"application/json",accept:"application/json","x-api-key":apiKey},body:JSON.stringify(payload)});
+    let response=await post({protocol:protocol.toUpperCase(),chainId:robinhoodMainnet.chainId,poolReferences:[{chainId:robinhoodMainnet.chainId,referenceIdentifier:pool.toLowerCase()}]}),body=await response.json() as any,poolInfo=poolInfoFrom(body,pool,lookup);
+    const poolParameters=poolParametersFrom(lookup);
+    if(response.ok&&!poolInfo&&poolParameters){
+      response=await post({protocol:protocol.toUpperCase(),chainId:robinhoodMainnet.chainId,poolParameters});
+      body=await response.json() as any;
+      poolInfo=poolInfoFrom(body,pool,lookup);
+    }
     const tvlUsd=poolInfo?deriveUsdTvlFromPoolInfo(poolInfo):null,observedAtMs=Date.now();
     if(!response.ok||!poolInfo||!finitePositive(tvlUsd??NaN))return {status:"invalid",reason:"UNISWAP_LP_POOL_INFO_RESPONSE_INVALID"};
     return {tvlUsd:tvlUsd!,tvlSource:`uniswap-lp-api:${new URL(endpoint).host}:${protocol}:derived-reserves`,observedAtMs,freshUntilMs:observedAtMs+TVL_FRESHNESS_TTL_MS,status:"fresh"};
   }catch(error){return {status:"missing",reason:`UNISWAP_LP_POOL_INFO_UNAVAILABLE:${error instanceof Error?error.message:"unknown"}`};}
 }
 
-export async function configuredUniswapTvl(protocol:'v3'|'v4',pool:string):Promise<TvlResult>{
- const lpApi=await configuredUniswapLpApiTvl(protocol,pool);
+export async function configuredUniswapTvl(protocol:'v3'|'v4',pool:string,lookup?:UniswapLpPoolLookup):Promise<TvlResult>{
+ const lpApi=await configuredUniswapLpApiTvl(protocol,pool,lookup);
  if(lpApi.status==="fresh"||process.env.UNISWAP_LP_API_KEY)return lpApi;
  const endpoint=process.env.UNISWAP_TVL_GRAPHQL_URL;
  if(!endpoint)return {status:'missing',reason:'UNISWAP_TVL_GRAPHQL_URL_NOT_CONFIGURED'};
