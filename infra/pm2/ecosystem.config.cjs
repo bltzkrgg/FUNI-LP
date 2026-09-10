@@ -23,6 +23,9 @@ const readOnlyEnv = {
   DATABASE_PATH: databasePath,
   ALCHEMY_RPC_URL: value("ALCHEMY_RPC_URL"),
   ALCHEMY_RPC_URLS: value("ALCHEMY_RPC_URLS"),
+  UNISWAP_LP_API_KEY: value("UNISWAP_LP_API_KEY"),
+  UNISWAP_LP_API_URL: value("UNISWAP_LP_API_URL"),
+  UNISWAP_TVL_TTL_MS: value("UNISWAP_TVL_TTL_MS", "300000"),
   RH_LOGS_RPC_URL: value(
     "RH_LOGS_RPC_URL",
     "https://rpc.mainnet.chain.robinhood.com",
@@ -75,6 +78,9 @@ const apps = [
       TELEGRAM_ALLOWED_USER_IDS: value("TELEGRAM_ALLOWED_USER_IDS"),
       ALCHEMY_RPC_URL: value("ALCHEMY_RPC_URL"),
       ALCHEMY_RPC_URLS: value("ALCHEMY_RPC_URLS"),
+      UNISWAP_LP_API_KEY: value("UNISWAP_LP_API_KEY"),
+      UNISWAP_LP_API_URL: value("UNISWAP_LP_API_URL"),
+      UNISWAP_TVL_TTL_MS: value("UNISWAP_TVL_TTL_MS", "300000"),
       RH_LOGS_RPC_URL: value(
         "RH_LOGS_RPC_URL",
         "https://rpc.mainnet.chain.robinhood.com",
