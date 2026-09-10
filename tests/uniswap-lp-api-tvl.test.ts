@@ -45,7 +45,7 @@ describe("Uniswap LP API TVL source", () => {
     expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
       protocol: "V4",
       chainId: 4663,
-      poolReferences: [{ referenceIdentifier: pool.toLowerCase() }],
+      poolReferences: [{ chainId: 4663, referenceIdentifier: pool.toLowerCase() }],
     });
   });
 

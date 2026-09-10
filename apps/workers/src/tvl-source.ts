@@ -83,7 +83,7 @@ export async function configuredUniswapLpApiTvl(protocol:"v3"|"v4",pool:string,f
   if(!Number.isSafeInteger(TVL_FRESHNESS_TTL_MS)||TVL_FRESHNESS_TTL_MS<1)return {status:"invalid",reason:"UNISWAP_TVL_TTL_MS_INVALID"};
   const endpoint=process.env.UNISWAP_LP_API_URL?.trim()||UNISWAP_LP_POOL_INFO_URL;
   try{
-    const response=await fetcher(endpoint,{method:"POST",headers:{"content-type":"application/json",accept:"application/json","x-api-key":apiKey},body:JSON.stringify({protocol:protocol.toUpperCase(),chainId:robinhoodMainnet.chainId,poolReferences:[{referenceIdentifier:pool.toLowerCase()}]})});
+    const response=await fetcher(endpoint,{method:"POST",headers:{"content-type":"application/json",accept:"application/json","x-api-key":apiKey},body:JSON.stringify({protocol:protocol.toUpperCase(),chainId:robinhoodMainnet.chainId,poolReferences:[{chainId:robinhoodMainnet.chainId,referenceIdentifier:pool.toLowerCase()}]})});
     const body=await response.json() as any;
     const poolInfo=(Array.isArray(body?.pools)?body.pools:[]).find((item:UniswapLpPoolInfo)=>String(item?.poolReferenceIdentifier??"").toLowerCase()===pool.toLowerCase()) as UniswapLpPoolInfo|undefined;
     const tvlUsd=poolInfo?deriveUsdTvlFromPoolInfo(poolInfo):null,observedAtMs=Date.now();
