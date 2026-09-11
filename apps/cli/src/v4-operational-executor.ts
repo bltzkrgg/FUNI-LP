@@ -413,13 +413,27 @@ export async function executeV4OperationalOpen(input:V4OperationalOpenPreflightI
       input.repo.confirmV4OperationalGas({txHash:hash,gas,eth,usd:Number(eth)/1e18*input.nativeUsd});
       return txReceipt;
     };
-    const ambiguous=async(phase:string,hash:Hash,nonce:number)=>{
+    const broadcastEndpoints=()=>[...(input.alternateWalletClients??(input.alternateWalletClient?[{providerIndex:1,providerType:'configured-write-provider',walletClient:input.alternateWalletClient}]:[])),{providerIndex:0,providerType:'configured-write-provider',walletClient:input.walletClient}];
+    const ambiguous=async(phase:string,hash:Hash,nonce:number,serialized?:Hex)=>{
       const until=Date.now()+(input.ambiguousMonitorMs??600_000);let evidence=await exactHashEvidence(input.rpc,input.wallet,hash,nonce);
       while(evidence.kind==='ABSENT'&&evidence.latestNonce===nonce&&evidence.pendingNonce===nonce&&Date.now()<until){await delay(Math.min(10_000,Math.max(1,until-Date.now())));evidence=await exactHashEvidence(input.rpc,input.wallet,hash,nonce);}
       if(evidence.kind==='RECEIPT')return reconcile(phase,hash,evidence.receipt);
       if(evidence.kind==='PENDING'){
         input.repo.transitionV4LiveOpenIntent(input.intentId,`${phase}_SUBMITTED`);
         return reconcile(phase,hash);
+      }
+      if(serialized&&evidence.kind==='ABSENT'&&evidence.latestNonce===nonce&&evidence.pendingNonce===nonce){
+        await acquireNonce(BigInt(nonce));
+        try{
+          for(const [endpointOrdinal,endpoint] of broadcastEndpoints().entries()){
+            input.repo.transitionV4LiveOpenIntent(input.intentId,`${phase}_IDENTICAL_RESEND_PREPARED`,{details:{phase,exactHash:hash,nonce,identicalSerializedBytes:true,providerIndex:endpoint.providerIndex,providerType:endpoint.providerType,immediateRecovery:true}});
+            try{await broadcastSignedTransaction({walletClient:endpoint.walletClient,serializedTransaction:serialized,expectedHash:hash,expectedSender:input.wallet,expectedChainId:input.rpc.config.chainId,expectedNonce:nonce,providerIndex:endpoint.providerIndex,providerName:`${endpoint.providerType}-${endpoint.providerIndex}`,onEvidence:item=>input.log?.('transaction_broadcast_transport',item)});sent++;input.repo.transitionV4LiveOpenIntent(input.intentId,`${phase}_SUBMITTED`);await input.notify?.(`${phase}_SUBMITTED`,{hash,identicalResend:true,providerIndex:endpoint.providerIndex});return reconcile(phase,hash);}
+            catch{
+              evidence=await exactHashEvidence(input.rpc,input.wallet,hash,nonce);if(evidence.kind==='RECEIPT')return reconcile(phase,hash,evidence.receipt);if(evidence.kind==='PENDING'){input.repo.transitionV4LiveOpenIntent(input.intentId,`${phase}_SUBMITTED`);return reconcile(phase,hash);}
+              if(evidence.kind==='INCONCLUSIVE'||evidence.kind==='ABSENT'&&!(evidence.latestNonce===nonce&&evidence.pendingNonce===nonce)||endpointOrdinal===broadcastEndpoints().length-1)break;
+            }
+          }
+        }finally{input.repo.releaseNonceMutex(input.wallet);}
       }
       const reason=evidence.kind==='INCONCLUSIVE'?`V4_BROADCAST_AMBIGUOUS:${evidence.reason}`:evidence.latestNonce===nonce&&evidence.pendingNonce===nonce?'V4_BROADCAST_PROVEN_ABSENT_NONCE_AVAILABLE':'V4_BROADCAST_EXACT_HASH_ABSENT_NONCE_CONSUMED_OR_REPLACED';
       input.repo.transitionV4LiveOpenIntent(input.intentId,evidence.kind==='INCONCLUSIVE'?`${phase}_BROADCAST_AMBIGUOUS`:'FAILED',{failureReason:reason,details:{phase,exactHash:hash,nonce,evidence}});
@@ -436,9 +450,9 @@ export async function executeV4OperationalOpen(input:V4OperationalOpenPreflightI
     const submit=async(phase:string,to:Address,data:Hex,hashField:'erc20Hash'|'permit2Hash'|'mintHash',gas:bigint,quote:{gasPrice:bigint;usd:number;eth:bigint})=>{
       if(phase==='MINT')await assertFreshV4EntryPrice(input);
       await acquireNonce(0n);
-      let hash!:Hash,nonce!:number,broadcastFailed=false;
+      let hash!:Hash,nonce!:number,serialized!:Hex,broadcastFailed=false;
       try{
-        nonce=await input.rpc.withClient(client=>client.getTransactionCount({address:input.wallet,blockTag:'pending'}),{stage:'v4_operational_prebroadcast',method:'eth_getTransactionCount'});const request={account:input.wallet,chainId:input.rpc.config.chainId,to,data,value:0n,gas:gas*12n/10n,gasPrice:quote.gasPrice,nonce},serialized=await signWithConfiguredAccount(input.walletClient,request);hash=keccak256(serialized);
+        nonce=await input.rpc.withClient(client=>client.getTransactionCount({address:input.wallet,blockTag:'pending'}),{stage:'v4_operational_prebroadcast',method:'eth_getTransactionCount'});const request={account:input.wallet,chainId:input.rpc.config.chainId,to,data,value:0n,gas:gas*12n/10n,gasPrice:quote.gasPrice,nonce};serialized=await signWithConfiguredAccount(input.walletClient,request);hash=keccak256(serialized);
         input.repo.addV4LiveGasEstimate({txHash:hash,intentId:input.intentId,phase,gas,eth:quote.eth,usd:quote.usd});
         input.repo.transitionV4LiveOpenIntent(input.intentId,`${phase}_PREPARED`,{[hashField]:hash,details:{phase,exactHash:hash,nonce,request:{...request,value:'0',gas:request.gas.toString(),gasPrice:request.gasPrice.toString()},serializedHash:hash}});
         await input.notify?.(`${phase}_PREPARED`,{hash,nonce});
@@ -446,14 +460,14 @@ export async function executeV4OperationalOpen(input:V4OperationalOpenPreflightI
         catch{broadcastFailed=true;}
         if(!broadcastFailed)input.repo.transitionV4LiveOpenIntent(input.intentId,`${phase}_SUBMITTED`);
       }finally{input.repo.releaseNonceMutex(input.wallet);}
-      if(broadcastFailed)return {hash,receipt:await ambiguous(phase,hash,nonce)};
+      if(broadcastFailed)return {hash,receipt:await ambiguous(phase,hash,nonce,serialized)};
       {
         await input.notify?.(`${phase}_SUBMITTED`,{hash});
         return {hash,receipt:await reconcile(phase,hash)};
       }
     };
     const resendPersisted=async(phase:string,hash:Hash)=>{
-      const alternateEndpoints=input.alternateWalletClients??(input.alternateWalletClient?[{providerIndex:1,providerType:'configured-write-provider',walletClient:input.alternateWalletClient}]:[]),endpoints=[...alternateEndpoints,{providerIndex:0,providerType:'configured-write-provider',walletClient:input.walletClient}];
+      const endpoints=broadcastEndpoints();
       const transition=input.repo.db.prepare('SELECT details_json FROM v4_live_transitions WHERE intent_id=? AND state=? ORDER BY ordinal DESC LIMIT 1').get(input.intentId,`${phase}_PREPARED`) as {details_json:string}|undefined;if(!transition)throw new Error('V4_PREPARED_REQUEST_MISSING');
       let details:any;try{details=JSON.parse(transition.details_json);}catch{throw new Error('V4_PREPARED_REQUEST_MALFORMED');}const raw=details.request,nonce=Number(raw?.nonce);if(!raw||!Number.isSafeInteger(nonce)||nonce<0)throw new Error('V4_PREPARED_REQUEST_MALFORMED');
       const request={account:getAddress(raw.account),chainId:Number(raw.chainId),to:getAddress(raw.to),data:raw.data as Hex,value:BigInt(raw.value),gas:BigInt(raw.gas),gasPrice:BigInt(raw.gasPrice),nonce},serialized=await signWithConfiguredAccount(input.walletClient,request);if(keccak256(serialized).toLowerCase()!==hash.toLowerCase())throw new Error('V4_SIGNED_TRANSACTION_HASH_MISMATCH');

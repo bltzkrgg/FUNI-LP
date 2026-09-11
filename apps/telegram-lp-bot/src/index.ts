@@ -47,6 +47,7 @@ import {
 import {
   dedicatedWallet,
   guardedWalletClient,
+  guardedWalletClients,
   initializeSafety,
   logsRpc,
   runtimeEnv as env,
@@ -4596,6 +4597,7 @@ async function v4OpenConfirm(ctx: any, intentId: string) {
         rpc,
         wallet: wallet.address,
         walletClient: guardedWalletClient(),
+        alternateWalletClients: guardedWalletClients().slice(1),
         runtime: {
           executionEnabled: env.EXECUTION_ENABLED,
           dryRun: env.DRY_RUN,

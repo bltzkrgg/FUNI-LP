@@ -121,8 +121,15 @@ const hasAlchemyRpc = Boolean(
     runtimeEnv.ALCHEMY_RPC_URLS || runtimeEnv.ALCHEMY_RPC_URL,
   ),
   rpcUrls = hasAlchemyRpc
-    ? orderedRpcUrls(runtimeEnv.ALCHEMY_RPC_URLS, runtimeEnv.ALCHEMY_RPC_URL)
-    : [runtimeEnv.RH_RPC_URL];
+    ? [
+        ...orderedRpcUrls(runtimeEnv.ALCHEMY_RPC_URLS, runtimeEnv.ALCHEMY_RPC_URL),
+        ...(runtimeEnv.RH_RPC_FALLBACK_URL ? [runtimeEnv.RH_RPC_FALLBACK_URL] : []),
+        runtimeEnv.RH_RPC_URL,
+      ].filter((url, index, urls) => urls.indexOf(url) === index)
+    : [
+        runtimeEnv.RH_RPC_URL,
+        ...(runtimeEnv.RH_RPC_FALLBACK_URL ? [runtimeEnv.RH_RPC_FALLBACK_URL] : []),
+      ].filter((url, index, urls) => urls.indexOf(url) === index);
 export const runtimeRpc = new FallbackRpc(
   { ...robinhoodMainnet, chainId: runtimeEnv.RH_CHAIN_ID, rpcUrls },
   rpcUrls,
@@ -183,6 +190,13 @@ export function guardedWalletClient(providerIndex = 0) {
     },
     transport: http(writeUrl),
   });
+}
+export function guardedWalletClients() {
+  return rpcUrls.map((_, providerIndex) => ({
+    providerIndex,
+    providerType: "configured-write-provider",
+    walletClient: guardedWalletClient(providerIndex),
+  }));
 }
 function environmentSafetyPayload(repo?: SqliteLedgerRepository) {
   const prior = repo?.safetyState() ?? ({} as Record<string, unknown>);
