@@ -48,6 +48,7 @@ export type V4OperationalPoolSnapshot={
   key:{currency0:string;currency1:string;fee:number;tickSpacing:number;hooks:string};
   initialized:boolean;
   liquidity:bigint;
+  trustedTvlUsd?:number|null;
 };
 
 export type V4OperationalPoolProbe=V4OperationalPoolSnapshot&{
@@ -145,7 +146,7 @@ export function evaluateV4OperationalGates(input:V4OperationalInput):V4Operation
   if(input.chainId!==V4_OPERATIONAL_CHAIN_ID)reasons.push('WRONG_CHAIN');
   if(!input.deploymentVerified)reasons.push('V4_DEPLOYMENT_UNVERIFIED');
   if(!input.pool.initialized)reasons.push('V4_POOL_UNINITIALIZED');
-  if(input.pool.liquidity<=0n)reasons.push('V4_POOL_NO_LIQUIDITY');
+  if(input.pool.liquidity<=0n&&!(Number.isFinite(input.pool.trustedTvlUsd)&&Number(input.pool.trustedTvlUsd)>0))reasons.push('V4_POOL_NO_LIQUIDITY');
   if(!input.price.fresh)reasons.push('V4_PRICE_STALE');
   if(!Number.isFinite(input.price.usdPerFunding)||input.price.usdPerFunding<=0)reasons.push('V4_PRICE_INVALID');
   if(input.positionUsd>input.maxPositionUsd)reasons.push('POSITION_VALUE_CAP_EXCEEDED');

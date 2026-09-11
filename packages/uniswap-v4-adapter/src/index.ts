@@ -154,7 +154,7 @@ export function validateV4DownsideRange(request:V4DownsideRangeRequest){
  return request;
 }
 export function buildV4SingleSidedDownsidePlan(pool:V4PoolState,fundingAmount:bigint,owner:Address,deadline:bigint,request:V4DownsideRangeRequest):V4MintPlan&{currentTick:number;sqrtPriceX96:bigint;amount0Expected:bigint;amount1Expected:bigint;requestedRange:V4DownsideRangeRequest;effectiveRange:V4DownsideRangeRequest}{
- validateV4DownsideRange(request);if(!pool.initialized||pool.liquidity<=0n)throw new Error('V4_POOL_ZERO_ACTIVE_LIQUIDITY');const spacing=pool.key.tickSpacing;if(!Number.isSafeInteger(spacing)||spacing<=0)throw new Error('V4_TICK_SPACING_INVALID');
+ validateV4DownsideRange(request);if(!pool.initialized)throw new Error('V4_POOL_UNINITIALIZED');const spacing=pool.key.tickSpacing;if(!Number.isSafeInteger(spacing)||spacing<=0)throw new Error('V4_TICK_SPACING_INVALID');
  const offset=(drop:number)=>Math.log(1-drop/100)/Math.log(1.0001),rawUpper=pool.tick+offset(request.upperDropPct),rawLower=pool.tick+offset(request.lowerDropPct),tickUpper=Math.floor(rawUpper/spacing)*spacing,tickLower=Math.floor(rawLower/spacing)*spacing;
  if(tickLower<=-MAX_TICK||tickUpper>MAX_TICK||tickLower>=tickUpper||pool.tick<tickUpper)throw new Error('V4_NOT_STRICT_TOKEN1_ONLY');const lower=sqrtPriceAtTick(tickLower),upper=sqrtPriceAtTick(tickUpper),liquidity=fundingAmount*Q96/(upper-lower),amount1Expected=ceilDiv(liquidity*(upper-lower),Q96);if(liquidity<=0n||amount1Expected<=0n||amount1Expected>fundingAmount)throw new Error('V4_FUNDING_CAP_EXCEEDED');
  const actual=(tick:number)=>(1-Math.pow(1.0001,tick-pool.tick))*100,effectiveRange={upperDropPct:Math.max(0,actual(tickUpper)),lowerDropPct:Math.max(0,actual(tickLower))};

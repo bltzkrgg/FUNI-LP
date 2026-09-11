@@ -71,9 +71,10 @@ describe('v4 operational open gate',()=>{
   it('blocks when deployments are not verified',()=>{
     expect(evaluateV4OperationalGates({...base,deploymentVerified:false}).reasons).toContain('V4_DEPLOYMENT_UNVERIFIED');
   });
-  it('blocks when pool is uninitialized or has no liquidity',()=>{
+  it('blocks when pool is uninitialized or has no liquidity evidence',()=>{
     expect(evaluateV4OperationalGates({...base,pool:{...base.pool,initialized:false}}).reasons).toContain('V4_POOL_UNINITIALIZED');
     expect(evaluateV4OperationalGates({...base,pool:{...base.pool,liquidity:0n}}).reasons).toContain('V4_POOL_NO_LIQUIDITY');
+    expect(evaluateV4OperationalGates({...base,pool:{...base.pool,liquidity:0n,trustedTvlUsd:30}}).reasons).not.toContain('V4_POOL_NO_LIQUIDITY');
   });
   it('blocks when price is not fresh',()=>{
     expect(evaluateV4OperationalGates({...base,price:{fresh:false,usdPerFunding:1}}).reasons).toContain('V4_PRICE_STALE');

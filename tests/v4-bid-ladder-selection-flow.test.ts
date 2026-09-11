@@ -125,7 +125,7 @@ describe("V4 BID ladder selected-pool flow", () => {
     expect(source).toContain("Confirm Live Open");
     expect(source).not.toContain("CLOSE_AND_SWAP");
   });
-  it("checks exact state and zero active liquidity before geometry and again before direct LIVE creation", () => {
+  it("checks exact state and requires active liquidity or trusted TVL before geometry and direct LIVE creation", () => {
     const source = readFileSync("apps/telegram-lp-bot/src/index.ts", "utf8"),
       depth = source.slice(
         source.indexOf("async function bidLadderSelectDepth"),
@@ -137,22 +137,22 @@ describe("V4 BID ladder selected-pool flow", () => {
       );
     expect(depth).toContain("exactV4PoolState");
     expect(depth).toContain("BID Ladder unavailable");
-    expect(depth).toContain("Pool state: NO ACTIVE LIQUIDITY");
-    expect(depth.indexOf("current.value.liquidity === 0n")).toBeLessThan(
+    expect(depth).toContain("hasTrustedV4PoolLiquidityEvidence(flow.state.poolId)");
+    expect(depth.indexOf("current.value.liquidity === 0n && !hasTrustedV4PoolLiquidityEvidence(flow.state.poolId)")).toBeLessThan(
       depth.indexOf("v4BidLadderGeometry({"),
     );
     expect(direct).toContain("The pool lost active liquidity before creation.");
-    expect(direct.indexOf("current.value.liquidity === 0n")).toBeLessThan(
+    expect(direct.indexOf("current.value.liquidity===0n&&!hasTrustedV4PoolLiquidityEvidence(flow.state.poolId)")).toBeLessThan(
       direct.indexOf("previewV4BidLadder({"),
     );
   });
-  it("uses exact-pair pool liquidity in selected-pool UI, rejects a pool that drains before click, and keeps raw StateView L out of Telegram text", () => {
+  it("uses exact-pair liquidity evidence in selected-pool UI and keeps raw StateView L out of Telegram text", () => {
     const source = readFileSync("apps/telegram-lp-bot/src/index.ts", "utf8"),
       selection = source.slice(
         source.indexOf("async function selectV4Pool"),
         source.indexOf("async function bidLadderDryRunPreview"),
       );
-    expect(selection).toContain("if (current.value.liquidity <= 0n)");
+    expect(selection).toContain("current.value.liquidity <= 0n && trustedV4PoolUsdMetric(registered).usd === null");
     expect(selection).toContain(
       'return ctx.reply("POOL_ZERO_ACTIVE_LIQUIDITY")',
     );
@@ -160,7 +160,7 @@ describe("V4 BID ladder selected-pool flow", () => {
       "await dexV4PoolLiquidityLine(String(selection.pool_id), key)",
     );
     expect(selection).toContain(
-      'Liquidity status: ${activeLiquidity ? "Active" : "NO ACTIVE LIQUIDITY"}',
+      "Liquidity status: ${liquidityStatus}",
     );
     expect(selection).not.toContain("formatV4PoolUsdMetric");
     expect(selection).not.toContain("Active liquidity:");

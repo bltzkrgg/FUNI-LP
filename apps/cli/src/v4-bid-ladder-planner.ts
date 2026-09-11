@@ -160,7 +160,7 @@ const assertPlanInput = (input: V4BidLadderPlanInput) => {
   if (input.entryUsdSnapshot !== undefined && (!Number.isFinite(input.entryUsdSnapshot) || input.entryUsdSnapshot < 0)) throw new Error('V4_BID_LADDER_ENTRY_USD_INVALID');
   const blockers = v4ExecutionBlockers(input.pool);
   if (blockers.length) throw new Error(`V4_BID_LADDER_POOL_BLOCKED:${blockers.join(',')}`);
-  if (!input.pool.initialized || input.pool.liquidity <= 0n || input.pool.blockNumber < 0n) throw new Error('V4_BID_LADDER_REFERENCE_STATE_INVALID');
+  if (!input.pool.initialized || input.pool.blockNumber < 0n) throw new Error('V4_BID_LADDER_REFERENCE_STATE_INVALID');
 };
 
 export function splitV4BidLadderFunding(totalFundingAmount: bigint): readonly bigint[] {

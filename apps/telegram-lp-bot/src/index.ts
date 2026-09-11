@@ -93,6 +93,7 @@ import {
 } from "../../cli/src/v4-operational-executor.js";
 import { v4PositionInspect } from "../../cli/src/v4-cli.js";
 import { cachedV4PoolsForToken } from "../../cli/src/v4-registry.js";
+import { trustedV4PoolUsdMetric } from "../../cli/src/v4-liquidity-display.js";
 import {
   fetchDexScreenerV4Liquidity,
   formatDexScreenerV4Liquidity,
@@ -329,6 +330,14 @@ const repo = () =>
   new SqliteLedgerRepository(runtimePaths.databasePath, {
     busyTimeoutMs: SQLITE_RUNTIME_BUSY_TIMEOUT_MS,
   });
+function hasTrustedV4PoolLiquidityEvidence(poolIdValue: unknown) {
+  const db = repo();
+  try {
+    return trustedV4PoolUsdMetric(db.v4RegistryPool(String(poolIdValue))).usd !== null;
+  } finally {
+    db.close();
+  }
+}
 function startRuntime() {
   const result = initializeTelegramRuntime({
     databasePath: runtimePaths.databasePath,
@@ -1941,9 +1950,15 @@ async function selectV4Pool(ctx: any, selectionId: string) {
   const current = await inspectV4Pool(rpc, key);
   if (current.status === "unavailable" || !current.value.initialized || !exactV4PoolState(current.value, key, String(selection.pool_id)))
     return ctx.reply("V4_POOL_ZERO_ACTIVE_LIQUIDITY");
-  if (current.value.liquidity <= 0n)
+  if (current.value.liquidity <= 0n && trustedV4PoolUsdMetric(registered).usd === null)
     return ctx.reply("POOL_ZERO_ACTIVE_LIQUIDITY");
-  const activeLiquidity = current.value.liquidity > 0n;
+  const trustedTvlUsd = trustedV4PoolUsdMetric(registered).usd;
+  const activeLiquidity = current.value.liquidity > 0n,
+    liquidityStatus = activeLiquidity
+      ? "Active"
+      : trustedTvlUsd !== null
+        ? "Trusted TVL evidence"
+        : "NO ACTIVE LIQUIDITY";
   if (activeLiquidity) {
     const cooldownReply = rejectActivePoolCooldown(ctx, flow, String(selection.pool_id));
     if (cooldownReply) return cooldownReply;
@@ -2028,7 +2043,7 @@ async function selectV4Pool(ctx: any, selectionId: string) {
     [
       `Selected ${target.value.symbol}/${funding.value.symbol} · v4`,
       `Fee: ${feeLabel}`,
-      `Liquidity status: ${activeLiquidity ? "Active" : "NO ACTIVE LIQUIDITY"}`,
+      `Liquidity status: ${liquidityStatus}`,
       await dexV4PoolLiquidityLine(String(selection.pool_id), key),
       formatLpEntryPriceGuard(entryPriceGuard),
       "Choose strategy.",
@@ -2063,7 +2078,7 @@ async function bidLadderDryRunPreview(ctx: any, enteredAmount?: string) {
   const current = await inspectV4Pool(rpc, key);
   if (current.status === "unavailable")
     return ctx.reply("V4_BID_LADDER_PREVIEW_UNAVAILABLE");
-  if (current.value.initialized && exactV4PoolState(current.value, key, String(flow.state.poolId ?? "")) && current.value.liquidity === 0n)
+  if (current.value.initialized && exactV4PoolState(current.value, key, String(flow.state.poolId ?? "")) && current.value.liquidity === 0n && !hasTrustedV4PoolLiquidityEvidence(flow.state.poolId))
     return ctx.reply(
       "V4 BID Ladder LIVE preview unavailable\nPool state: NO ACTIVE LIQUIDITY\nThe pool lost active liquidity before creation.\nRetry when liquidity returns.",
     );
@@ -2146,7 +2161,7 @@ async function bidLadderDirectLiveOnce(ctx: any, enteredAmount?: string, interac
     const poolStartedAtMs=Date.now(),current=await execution.run("SELECTED_POOL_RESOLUTION",signal=>inspectV4Pool(rpc.scoped({workflowId:execution.identity.requestId,stage:"selected_pool_resolution",signal}),key),{reserveMs:1_500}),poolEndedAtMs=Date.now();
     log("telegram_interactive_stage",{interactionId:execution.identity.requestId,interactionType:"V4_BID_LADDER_AMOUNT_PREVIEW",requestId:execution.identity.requestId,stage:"SELECTED_POOL_RESOLUTION",startedAtMs:poolStartedAtMs,endedAtMs:poolEndedAtMs,elapsedMs:poolEndedAtMs-poolStartedAtMs,dbWaitMs:0,rpcWaitMs:poolEndedAtMs-poolStartedAtMs,provider:"robinhood-rpc",queueWaitMs:0,cache:"MISS",outcome:current.status.toUpperCase()});
     if(current.status==="unavailable")return await failClosed("V4_BID_LADDER_PREVIEW_UNAVAILABLE");
-    if(current.value.initialized&&exactV4PoolState(current.value,key,String(flow.state.poolId??""))&&current.value.liquidity===0n)return await failClosed("V4 BID Ladder LIVE preview unavailable\nPool state: NO ACTIVE LIQUIDITY\nThe pool lost active liquidity before creation.\nRetry when liquidity returns.");
+    if(current.value.initialized&&exactV4PoolState(current.value,key,String(flow.state.poolId??""))&&current.value.liquidity===0n&&!hasTrustedV4PoolLiquidityEvidence(flow.state.poolId))return await failClosed("V4 BID Ladder LIVE preview unavailable\nPool state: NO ACTIVE LIQUIDITY\nThe pool lost active liquidity before creation.\nRetry when liquidity returns.");
     const preview = previewV4BidLadder({
         pool: current.value,
         funding: { ...funding, address: getAddress(funding.address) },
@@ -2267,7 +2282,7 @@ async function bidLadderSelectDepth(ctx: any, flow: TelegramFlowSession, bps: nu
   if (current.status === "unavailable") return ctx.reply("V4_BID_LADDER_DEPTH_CHECK_UNAVAILABLE");
   if (!current.value.initialized || !exactV4PoolState(current.value, key, String(flow.state.poolId ?? "")))
     return ctx.reply("V4_BID_LADDER_DEPTH_CHECK_UNAVAILABLE");
-  if (current.value.liquidity === 0n)
+  if (current.value.liquidity === 0n && !hasTrustedV4PoolLiquidityEvidence(flow.state.poolId))
     return ctx.reply(
       [
         "BID Ladder unavailable",
@@ -3134,9 +3149,13 @@ async function finishV4Range(
     walletBalance(funding.address as Address, wallet),
     inspectV4Pool(rpc, key),
   ]);
-  if (pool.status === "unavailable" || pool.value.liquidity <= 0n)
-    return ctx.reply("V4_POOL_ZERO_ACTIVE_LIQUIDITY");
   const db = repo();
+  const registryPool = db.v4RegistryPool(String(flow.state.poolId));
+  const trustedTvlUsd = trustedV4PoolUsdMetric(registryPool).usd;
+  if (pool.status === "unavailable" || (pool.value.liquidity <= 0n && trustedTvlUsd === null)) {
+    db.close();
+    return ctx.reply("V4_POOL_ZERO_ACTIVE_LIQUIDITY");
+  }
   let marketMetric;
   try {
     marketMetric = readTrustedMarketMetric(db, target.address);

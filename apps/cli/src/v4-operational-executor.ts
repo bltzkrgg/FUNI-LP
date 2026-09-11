@@ -30,6 +30,7 @@ import { enqueuePortfolioRefresh, markOperationalPositionOpenConfirming } from '
 import { broadcastSignedTransaction, exactHashEvidence, signWithConfiguredAccount } from './transaction-boundary.js';
 import { freshLpEntryPriceGuard, orientPoolPriceFundingPerTarget } from './lp-entry-price-guard.js';
 import { ensureEconomicReconciliationWork } from './economic-reconciliation-work.js';
+import { trustedV4PoolUsdMetric } from './v4-liquidity-display.js';
 
 export type { GenericV4OpenSelection } from './v4-operational-open.js';
 
@@ -327,7 +328,8 @@ export async function v4OperationalOpenPreflight(input:V4OperationalOpenPrefligh
   const decimals=s.fundingDecimals??18;
   const positionUsd=Number(s.amount)/10**decimals*input.fundingUsd;
   const approvalUsd=positionUsd;
-  const poolSnapshot:V4OperationalPoolSnapshot={id:pool?.id??s.poolId,key,initialized:Boolean(pool?.initialized),liquidity:pool?.liquidity??0n};
+  const trustedTvlUsd=trustedV4PoolUsdMetric(registry,now).usd;
+  const poolSnapshot:V4OperationalPoolSnapshot={id:pool?.id??s.poolId,key,initialized:Boolean(pool?.initialized),liquidity:pool?.liquidity??0n,trustedTvlUsd};
   const gate=evaluateV4OperationalGates({
     chainId,executionEnabled:input.runtime.executionEnabled,dryRun:input.runtime.dryRun,
     emergencyPause:input.runtime.emergencyPause,liveCanaryEnabled:false,v4LiveCanaryEnabled:false,
@@ -451,7 +453,7 @@ export async function executeV4OperationalOpen(input:V4OperationalOpenPreflightI
       }
     };
     const resendPersisted=async(phase:string,hash:Hash)=>{
-      const endpoints=input.alternateWalletClients??(input.alternateWalletClient?[{providerIndex:1,providerType:'configured-write-provider',walletClient:input.alternateWalletClient}]:[]);if(!endpoints.length)throw new Error('V4_ALTERNATE_WRITE_PROVIDER_REQUIRED');
+      const alternateEndpoints=input.alternateWalletClients??(input.alternateWalletClient?[{providerIndex:1,providerType:'configured-write-provider',walletClient:input.alternateWalletClient}]:[]),endpoints=[...alternateEndpoints,{providerIndex:0,providerType:'configured-write-provider',walletClient:input.walletClient}];
       const transition=input.repo.db.prepare('SELECT details_json FROM v4_live_transitions WHERE intent_id=? AND state=? ORDER BY ordinal DESC LIMIT 1').get(input.intentId,`${phase}_PREPARED`) as {details_json:string}|undefined;if(!transition)throw new Error('V4_PREPARED_REQUEST_MISSING');
       let details:any;try{details=JSON.parse(transition.details_json);}catch{throw new Error('V4_PREPARED_REQUEST_MALFORMED');}const raw=details.request,nonce=Number(raw?.nonce);if(!raw||!Number.isSafeInteger(nonce)||nonce<0)throw new Error('V4_PREPARED_REQUEST_MALFORMED');
       const request={account:getAddress(raw.account),chainId:Number(raw.chainId),to:getAddress(raw.to),data:raw.data as Hex,value:BigInt(raw.value),gas:BigInt(raw.gas),gasPrice:BigInt(raw.gasPrice),nonce},serialized=await signWithConfiguredAccount(input.walletClient,request);if(keccak256(serialized).toLowerCase()!==hash.toLowerCase())throw new Error('V4_SIGNED_TRANSACTION_HASH_MISMATCH');
@@ -502,7 +504,8 @@ export async function executeV4OperationalOpen(input:V4OperationalOpenPreflightI
     const exactPermit=await permit2Allowance(input.rpc,input.wallet,getAddress(selection.funding),V4_ROBINHOOD_DEPLOYMENTS.positionManager);
     if(exactErc20!==selection.amount||permit2ApprovalRequired(exactPermit[0],selection.amount,exactPermit[1],block.timestamp))throw new Error('V4_EXACT_ALLOWANCE_VERIFICATION_FAILED');
     const refreshed=await inspectV4Pool(input.rpc,selection.key as V4PoolKey);
-    if(refreshed.status==='unavailable'||!refreshed.value.initialized||refreshed.value.liquidity<=0n||v4ExecutionBlockers(refreshed.value).length)throw new Error('V4_POOL_EXECUTION_INELIGIBLE');
+    const executionTrustedTvlUsd=trustedV4PoolUsdMetric(input.repo.v4RegistryPool(selection.poolId),Date.now()).usd;
+    if(refreshed.status==='unavailable'||!refreshed.value.initialized||(refreshed.value.liquidity<=0n&&executionTrustedTvlUsd===null)||v4ExecutionBlockers(refreshed.value).length)throw new Error('V4_POOL_EXECUTION_INELIGIBLE');
     assertSelectedPool(refreshed.value.key,refreshed.value.id,selection);
     const deadline=(await input.rpc.withClient(client=>client.getBlock())).timestamp+600n;
     const plan=buildGenericV4SingleSidedDownsidePlan({pool:refreshed.value,target:getAddress(selection.target),funding:getAddress(selection.funding),fundingAmount:selection.amount,owner:input.wallet,deadline,range:input.range});

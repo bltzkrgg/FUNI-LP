@@ -64,6 +64,7 @@ import {
 } from "./lp-entry-price-guard.js";
 import { enqueuePortfolioRefresh, enqueueTargetedPositionReconciliation, markOperationalPositionOpenConfirming, persistPortfolioSnapshot } from "./active-position-reconciliation.js";
 import { trustedV4WethUsdReference } from "./portfolio.js";
+import { trustedV4PoolUsdMetric } from "./v4-liquidity-display.js";
 import {
   estimateV4BidLadderMarketCapRange,
   type BidLadderToken,
@@ -82,6 +83,9 @@ const isManualRepositionAuthorization = (value: unknown): value is string =>
   /^manual-reposition:[^:]+:[0-9a-f-]{36}$/i.test(value);
 export const V4_BID_LADDER_CLOSE_SLIPPAGE_BPS = 200;
 const BPS_DENOMINATOR = 10_000n;
+function hasV4PoolLiquidityEvidence(repo:SqliteLedgerRepository,poolIdValue:unknown,pool:Pick<V4PoolState,"liquidity">){
+  return pool.liquidity>0n||trustedV4PoolUsdMetric(repo.v4RegistryPool(String(poolIdValue))).usd!==null;
+}
 function integerSquareRoot(value: bigint) {
   if (value < 0n) throw new Error("V4_BID_LADDER_CLOSE_PRICE_INVALID");
   if (value < 2n) return value;
@@ -1182,7 +1186,7 @@ async function materializeOpenState(
     blockers.push("V4_BID_LADDER_OPEN_STATE_INVALID");
   if (input.rpc.config.chainId !== CHAIN_ID)
     blockers.push("V4_BID_LADDER_WRONG_CHAIN");
-  if (!pool.initialized || pool.liquidity <= 0n)
+  if (!pool.initialized || !hasV4PoolLiquidityEvidence(input.repo,state.parent.pool_id,pool))
     blockers.push("V4_BID_LADDER_POOL_UNINITIALIZED");
   blockers.push(...v4ExecutionBlockers(pool));
   const fundingIndex = Number(state.parent.funding_index) as 0 | 1,
@@ -1534,7 +1538,7 @@ async function validateFinalOpenAuthority(
   if (String(state.parent.status) !== "PLANNED" || String(state.parent.execution_mode) !== "LIVE")
     blockers.push("V4_BID_LADDER_OPEN_STATE_INVALID");
   if (input.rpc.config.chainId !== CHAIN_ID) blockers.push("V4_BID_LADDER_WRONG_CHAIN");
-  if (!pool.initialized || pool.liquidity <= 0n) blockers.push("V4_BID_LADDER_POOL_UNINITIALIZED");
+  if (!pool.initialized || !hasV4PoolLiquidityEvidence(input.repo,state.parent.pool_id,pool)) blockers.push("V4_BID_LADDER_POOL_UNINITIALIZED");
   blockers.push(...v4ExecutionBlockers(pool));
   const fundingIndex = Number(state.parent.funding_index) as 0 | 1,
     targetIndex = Number(state.parent.target_index) as 0 | 1,
